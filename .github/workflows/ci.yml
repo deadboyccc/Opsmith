@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Configure git identity for test repositories
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy
+      - run: uv run pytest -q --cov --cov-report=term
+
+  postgres:
+    name: acceptance suite on PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine3.24
+        env:
+          POSTGRES_USER: opsmith
+          POSTGRES_PASSWORD: opsmith
+          POSTGRES_DB: opsmith
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opsmith" --health-interval 5s --health-timeout 3s
+          --health-retries 20
+    env:
+      OPSMITH_DATABASE_URL: postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+          python-version: "3.12"
+          enable-cache: true
+      - run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.com"
+      - run: uv sync --frozen --all-extras
+      - run: uv run pytest -q tests/test_e2e.py
+
+  docker:
+    name: container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target runtime -t opsmith:ci .
+      - run: docker build --target dev -t opsmith-dev:ci .
+      - run: docker run --rm opsmith-dev:ci pytest -q -x
