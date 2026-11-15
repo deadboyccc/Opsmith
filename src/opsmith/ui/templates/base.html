@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% block head %}{% endblock %}
+  <title>{% block title %}Opsmith{% endblock %} · Opsmith</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="bar">
+    <a class="brand" href="/ui">Opsmith</a>
+    {% if user %}
+    {% set pq = ("?project_id=" ~ project.id) if project else "" %}
+    <nav>
+      <a href="/ui{{ pq }}">Dashboard</a>
+      <a href="/ui/review{{ pq }}">Review queue</a>
+      <a href="/ui/tasks{{ pq }}">Tasks</a>
+      <a href="/ui/leads{{ pq }}">Leads</a>
+      <a href="/ui/executions{{ pq }}">Executions</a>
+      <a href="/ui/config{{ pq }}">Configuration</a>
+      <a href="/ui/jobs">Jobs</a>
+    </nav>
+    <span class="who">{{ user.name }} · {{ user.role }} · <a href="/ui/logout">Sign out</a></span>
+    {% endif %}
+  </div>
+</header>
+<main>
+  {% if projects and projects|length > 1 %}
+  <p class="muted">Project:
+    {% for p in projects %}<a href="?project_id={{ p.id }}">{{ p.name }}</a>{% if not loop.last %} · {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

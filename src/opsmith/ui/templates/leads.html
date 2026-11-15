@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% from "macros.html" import status, dt %}
+{% block title %}Leads{% endblock %}
+{% block content %}
+<h1>Investigation leads</h1>
+<p class="muted">Leads carry analysis context between inference runs: open → carried → confirmed | refuted | expired.</p>
+<div class="table-wrap"><table><tr><th>State</th><th>Lead</th><th>Age</th><th>Source</th><th>Signal</th><th>Updated</th></tr>
+{% for l in leads %}<tr><td>{{ status(l.state) }}{% if l.escalated %} <span class="chip s-bad">escalated</span>{% endif %}</td>
+<td>{{ l.title }}<br><span class="muted">{{ l.hypothesis[:200] }}</span></td><td>{{ l.age }}/{{ l.max_carry }}</td>
+<td>{{ l.source }}</td><td><code>{{ l.signal or "—" }}</code></td><td>{{ dt(l.updated_at) }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No leads yet.</td></tr>{% endfor %}</table></div>
+{% endblock %}

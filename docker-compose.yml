@@ -1,0 +1,66 @@
+# Opsmith stack: PostgreSQL + API/UI + worker + scheduler.
+#   docker compose up -d --build
+#   docker compose exec api opsmith init --tenant acme --admin "Your Name"
+name: opsmith
+
+x-opsmith: &opsmith
+  build:
+    context: .
+    target: runtime
+  image: opsmith:local
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    OPSMITH_DATABASE_URL: postgresql+psycopg://opsmith:${POSTGRES_PASSWORD:-opsmith}@postgres:5432/opsmith
+    OPSMITH_DATA_DIR: /data
+  volumes:
+    - opsmith-data:/data
+
+services:
+  postgres:
+    image: postgres:18.6-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opsmith
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opsmith}
+      POSTGRES_DB: opsmith
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opsmith -d opsmith"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *opsmith
+    command: ["opsmith", "api", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *opsmith
+    command: ["opsmith", "worker"]
+    healthcheck:
+      disable: true  # no HTTP port; liveness is visible via job metrics and dead jobs
+    depends_on:
+      api:
+        condition: service_healthy  # api creates the schema on first start
+
+  scheduler:
+    <<: *opsmith
+    command: ["opsmith", "scheduler"]
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  opsmith-data:

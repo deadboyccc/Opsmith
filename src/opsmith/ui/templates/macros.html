@@ -1,0 +1,7 @@
+{% macro status(s) -%}
+{%- set cls = {"succeeded":"s-ok","merged":"s-ok","verified":"s-ok","success":"s-ok","pr_open":"s-ok","confirmed":"s-ok",
+ "failed":"s-bad","dead":"s-bad","regressed":"s-bad","failure":"s-bad","rejected":"s-bad","budget_exceeded":"s-bad","expired":"s-warn",
+ "in_review":"s-warn","running":"s-warn","executing":"s-warn","pending":"s-warn","investigating":"s-warn","carried":"s-warn"}.get(s, "") -%}
+<span class="chip {{ cls }}">{{ s or "—" }}</span>
+{%- endmacro %}
+{% macro dt(v) -%}{{ v.strftime("%Y-%m-%d %H:%M") if v else "—" }}{%- endmacro %}

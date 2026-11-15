@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "macros.html" import status, dt %}
+{% block title %}Configuration{% endblock %}
+{% block content %}
+<h1>Configuration{% if project %} · {{ project.name }}{% endif %}</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if project %}
+<h2>Connectors</h2>
+<div class="table-wrap"><table><tr><th>Name</th><th>Type</th><th>Kind</th><th>Interval</th><th>Credentials ref</th><th>Last run</th><th>Enabled</th></tr>
+{% for c in connectors %}<tr><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ c.kind }}</td><td>{{ c.interval_seconds }}s</td><td><code>{{ c.credentials_ref or "—" }}</code></td><td>{{ dt(c.last_run_at) }}</td><td>{{ "yes" if c.enabled else "no" }}</td></tr>{% else %}<tr><td colspan="7" class="muted">None</td></tr>{% endfor %}</table></div>
+<h2>Repositories</h2>
+<div class="table-wrap"><table><tr><th>Name</th><th>SCM</th><th>Branch</th><th>Audit types</th><th>Test command</th><th>Last audited</th></tr>
+{% for r in repos %}<tr><td>{{ r.name }}</td><td>{{ r.scm_provider }}</td><td>{{ r.default_branch }}</td><td>{{ r.audit_types|join(", ") }}</td><td><code>{{ r.test_command or "—" }}</code></td><td><code>{{ (r.last_audited_sha or "—")[:10] }}</code></td></tr>{% else %}<tr><td colspan="6" class="muted">None</td></tr>{% endfor %}</table></div>
+<h2>Services</h2>
+<div class="table-wrap"><table><tr><th>Name</th><th>Environment</th><th>Owner</th><th>Interval override</th></tr>
+{% for s in services %}<tr><td>{{ s.name }}</td><td>{{ s.environment }}</td><td>{{ s.owner or "—" }}</td><td>{{ s.inference_interval_hours or "project default" }}</td></tr>{% else %}<tr><td colspan="4" class="muted">None</td></tr>{% endfor %}</table></div>
+<h2>Schedules</h2>
+<div class="table-wrap"><table><tr><th>Job</th><th>Target</th><th>Cron / interval</th><th>Next run</th><th>Enabled</th></tr>
+{% for s in schedules %}<tr><td>{{ s.job_kind }}</td><td><code>{{ s.target_id }}</code></td><td>{{ s.cron or ((s.interval_seconds|string) ~ "s") }}</td><td>{{ dt(s.next_run_at) }}</td><td>{{ "yes" if s.enabled else "no" }}</td></tr>{% else %}<tr><td colspan="5" class="muted">None</td></tr>{% endfor %}</table></div>
+<h2>Project settings</h2>
+<p class="muted">Budgets, protected paths, audit schedule, LLM models per stage, provider allowlist, notification channels, policy-as-code rules.</p>
+{% if is_admin %}
+<form method="post" action="/ui/projects/{{ project.id }}/settings">
+<textarea name="settings_json" class="tall">{{ settings_json }}</textarea>
+<p><button type="submit">Save settings</button></p></form>
+{% else %}<pre>{{ settings_json }}</pre>{% endif %}
+{% else %}<p>No project.</p>{% endif %}
+{% endblock %}

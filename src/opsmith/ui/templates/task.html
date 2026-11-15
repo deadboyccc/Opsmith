@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "macros.html" import status, dt %}
+{% block title %}{{ task.title }}{% endblock %}
+{% block content %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<h1>{{ task.title }}</h1>
+<p>{{ status(task.status) }} <span class="chip">{{ task.priority }} · score {{ task.score }}</span>
+<span class="chip">{{ task.category }}</span> <span class="chip">severity {{ task.severity }}</span>
+<span class="chip">confidence {{ "%.2f"|format(task.confidence) }}</span>
+{% if task.protection != "none" %}<span class="chip s-warn">protected: {{ task.protection }}</span>{% endif %}
+{% if task.pr_url %}<a href="{{ task.pr_url }}">PR #{{ task.pr_number }}</a> {{ status(task.ci_status) }}{% endif %}</p>
+
+<div class="row">
+<div class="card"><div class="label">Problem</div><p class="prewrap">{{ task.problem_statement }}</p>
+<div class="label">Proposed approach</div><p>{{ task.proposed_approach }}</p>
+<div class="label">Acceptance criteria</div><ul>{% for c in task.acceptance_criteria %}<li>{{ c }}</li>{% endfor %}</ul>
+<div class="label">Risk · effort</div><p>{{ task.risk_assessment }} · {{ task.effort_estimate }}</p>
+<div class="label">Target</div><p><code>{{ task.branch_name }}</code><br>{{ task.paths|join(", ") or "—" }}</p>
+<div class="label">Verification</div><p>Tests: {{ task.verification.get("tests_to_add", [])|join("; ") or "—" }}<br>
+Watch: {{ task.verification.get("metrics_to_watch", [])|join(", ") or "—" }}</p></div>
+
+{% if can_review and task.status == "in_review" %}
+<div class="card"><div class="label">Review</div>
+<form method="post" action="/ui/tasks/{{ task.id }}/review">
+  <input type="hidden" name="expected_version" value="{{ task.version }}">
+  <p><label class="label">Decision</label>
+  <select name="decision">
+    <option value="approve">Approve (edits below make it "approve with edits")</option>
+    <option value="reject">Reject</option>
+    <option value="defer">Defer</option>
+    <option value="request_investigation">Request more investigation</option>
+  </select></p>
+  <p><label class="label">Reject reason</label><select name="reason_code"><option value=""></option>
+  {% for r in reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></p>
+  <p><label class="label">Edit title</label><input type="text" name="edit_title" value="{{ task.title }}"></p>
+  <p><label class="label">Edit approach</label><textarea name="edit_approach">{{ task.proposed_approach }}</textarea></p>
+  <p><label class="label">Edit priority</label><select name="edit_priority">
+  {% for p in ["P0","P1","P2","P3"] %}<option {{ "selected" if p == task.priority }}>{{ p }}</option>{% endfor %}</select></p>
+  <p><label class="label">Investigation question</label><input type="text" name="investigation"></p>
+  <p><label class="label">Comment</label><textarea name="comment"></textarea></p>
+  {% if task.protection == "elevated" %}<p><label><input type="checkbox" name="elevated_ack"> I approve changes to protected paths (admin)</label></p>{% endif %}
+  <p><button type="submit">Submit review</button></p>
+</form></div>
+{% endif %}
+</div>
+
+{% if task.execution_report %}
+<h2>Execution report</h2><pre>{{ json(task.execution_report) }}</pre>
+{% endif %}
+
+<h2>Provenance: raw signal → PR</h2>
+<div class="card"><ol class="chain">
+  {% for e in prov.executions %}<li>Execution <code>{{ e.id }}</code> attempt {{ e.attempt }} ({{ e.agent }}) {{ status(e.status) }}
+    {% if e.pr_url %}→ <a href="{{ e.pr_url }}">{{ e.pr_url }}</a>{% endif %}{% if e.error %} <span class="s-bad">{{ e.error }}</span>{% endif %}</li>{% endfor %}
+  {% for r in prov.reviews %}<li>Review by <b>{{ r.reviewer_name }}</b> ({{ r.reviewer_role }}): {{ r.decision }}{% if r.reason_code %} · {{ r.reason_code }}{% endif %} · {{ r.created_at[:16] }}</li>{% endfor %}
+  {% for f in prov.findings %}<li>Finding <code>{{ f.id }}</code> [{{ f.source }}] {{ f.title }}
+    {% if f.path %}<code>{{ f.path }}{% if f.line %}:{{ f.line }}{% endif %}</code>{% endif %}
+    {% for ref in f.evidence_refs[:4] %}<br><span class="muted">↳ {{ ref }}</span>{% endfor %}</li>{% endfor %}
+  {% for r in prov.inference_runs %}<li>Inference run <code>{{ r.id }}</code> slot {{ r.slot }} · {{ r.model }} · prompt {{ r.prompt_id }}@{{ r.prompt_version }} · prev <code>{{ r.previous_run_id or "—" }}</code></li>{% endfor %}
+  {% for r in prov.audit_runs %}<li>Audit run <code>{{ r.id }}</code> {{ r.mode }} @ <code>{{ (r.commit_sha or "")[:10] }}</code></li>{% endfor %}
+  {% for b in prov.bundles %}<li>Bundle <code>{{ b.id }}</code> {{ b.window_start[:16] }} → {{ b.window_end[:16] }} · {{ b.stats.events }} events · raw: {% for k in b.raw_refs[:2] %}<code>{{ k }}</code> {% endfor %}</li>{% endfor %}
+  {% for l in prov.leads %}<li>Lead <code>{{ l.id }}</code> {{ l.title }} {{ status(l.state) }} (age {{ l.age }}, from run <code>{{ l.originating_run_id or "review" }}</code>)</li>{% endfor %}
+</ol></div>
+
+<h2>Audit trail</h2>
+<div class="table-wrap"><table><tr><th>When</th><th>Action</th><th>Transition</th><th>Actor</th></tr>
+{% for a in prov.audit_log %}<tr><td>{{ a.created_at[:19] }}</td><td>{{ a.action }}</td><td>{{ a.from_state or "" }} → {{ a.to_state or "" }}</td><td>{{ a.actor_type }}:{{ a.actor_id }}</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

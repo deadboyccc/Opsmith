@@ -1,0 +1,70 @@
+# Declarative project configuration:  opsmith apply opsmith.example.toml --tenant acme
+# Re-applying is idempotent (upserts by name). Secrets are references, never values.
+
+[[projects]]
+name = "payments"
+
+[projects.settings]
+inference_interval_hours = 6        # "X" - per-service override via services.inference_interval_hours
+lead_max_carry = 3
+audit_cron = "0 2 * * *"            # nightly; a full audit at least every audit_full_every_days
+audit_full_every_days = 7
+executor_agent = "heuristic"        # "claude" to let Claude implement approved tasks
+protected_paths = [
+  { pattern = ".github/**", mode = "elevated" },
+  { pattern = "**/auth/**", mode = "elevated" },
+  { pattern = "**/*.pem", mode = "excluded" },
+]
+notifications = [
+  { type = "log" },
+  # { type = "webhook", url = "https://hooks.slack.com/services/...", events = ["task.*", "lead.escalated", "job.dead"] },
+]
+
+[projects.settings.budgets]
+max_tokens_per_run = 400000
+max_cost_per_run_usd = 5.0
+max_cost_per_day_usd = 50.0
+max_execution_seconds = 1800
+max_agent_iterations = 8
+max_concurrent_executions = 2
+
+# Use Claude for analysis and drafting (requires the `anthropic` extra and ANTHROPIC_API_KEY):
+# [projects.settings.llm.default]
+# provider = "anthropic"
+# model = "claude-opus-5-5"
+# effort = "medium"
+
+[[projects.repositories]]
+name = "payments-api"
+scm_provider = "github"
+url = "https://github.com/acme/payments-api.git"
+full_name = "acme/payments-api"
+default_branch = "main"
+credentials_ref = "env:GITHUB_TOKEN"   # fine-grained: contents rw (branches), pull requests rw, checks r
+test_command = "pip install -q -e '.[test]' && pytest -q"
+lint_command = "ruff check ."
+audit_types = ["security", "bugs", "dependency", "compliance", "performance"]
+
+[[projects.services]]
+name = "payments-api"
+repository = "payments-api"
+owner = "team-payments"
+path_prefixes = ["app/"]
+
+[[projects.connectors]]
+name = "loki"
+type = "loki"
+service = "payments-api"
+interval_seconds = 900
+credentials_ref = "env:LOKI_TOKEN"
+config = { url = "http://loki:3100", query = '{service_name="payments-api"}', limit = 5000 }
+
+[[projects.connectors]]
+name = "prometheus"
+type = "prometheus"
+service = "payments-api"
+interval_seconds = 900
+config = { url = "http://prometheus:9090", step = "60s", baseline_seconds = 21600, queries = [
+  { name = "http_request_duration_p95_ms", promql = 'histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="payments-api"}[5m]))) * 1000' },
+  { name = "http_error_rate", promql = 'sum(rate(http_requests_total{service="payments-api",code=~"5.."}[5m])) / sum(rate(http_requests_total{service="payments-api"}[5m]))' },
+] }

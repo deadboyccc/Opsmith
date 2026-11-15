@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% from "macros.html" import status, dt %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Jobs{% if status %} · {{ status }}{% endif %}</h1>
+<p><a href="/ui/jobs">All</a> · <a href="/ui/jobs?status=dead">Dead</a> · <a href="/ui/jobs?status=queued">Queued</a> · <a href="/ui/jobs?status=running">Running</a></p>
+<div class="table-wrap"><table><tr><th>Status</th><th>Kind</th><th>Attempts</th><th>Error</th><th>Created</th><th></th></tr>
+{% for j in jobs %}<tr><td>{{ status(j.status) }}</td><td>{{ j.kind }}</td><td>{{ j.attempts }}/{{ j.max_attempts }}</td>
+<td class="muted">{{ (j.last_error or "")[:160] }}</td><td>{{ dt(j.created_at) }}</td>
+<td>{% if is_admin and j.status == "dead" %}<form class="inline" method="post" action="/ui/jobs/{{ j.id }}/retry"><button class="secondary">Retry</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No jobs.</td></tr>{% endfor %}</table></div>
+{% endblock %}
