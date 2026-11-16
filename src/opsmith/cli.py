@@ -123,7 +123,14 @@ def _worker_loop(settings: Settings, poll: float, once: bool) -> None:
     while not _STOP.is_set():
         try:
             worker.recover_expired_leases()
-            results = worker.drain(max_jobs=50)
+            # One job at a time, so a stop signal takes effect after the current job
+            # instead of after a whole batch.
+            results: list[object] = []
+            while not _STOP.is_set() and len(results) < 50:
+                result = worker.run_once()
+                if result is None:
+                    break
+                results.append(result)
         except Exception:
             if once:
                 raise

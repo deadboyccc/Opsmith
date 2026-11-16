@@ -49,6 +49,8 @@ def env(tmp_path: Path, monkeypatch) -> Path:
     data = tmp_path / "data"
     monkeypatch.setenv("OPSMITH_DATA_DIR", str(data))
     monkeypatch.setenv("OPSMITH_LOG_JSON", "false")
+    for name in ("OPSMITH_DATABASE_URL", "OPSMITH_SANDBOX_BACKEND", "OPSMITH_LOCAL_ROOT"):
+        monkeypatch.delenv(name, raising=False)  # the CLI tests always use their own SQLite file
     return data
 
 

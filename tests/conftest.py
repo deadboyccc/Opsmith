@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import close_all_sessions
 
+from opsmith.audits import external
 from opsmith.config import Settings
 from opsmith.db import utcnow
 from opsmith.demo import make_repo
@@ -25,16 +33,61 @@ from opsmith.security import create_tenant, create_user
 FAKE_AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 
+_ENGINES: list[Any] = []
+
+
+@contextmanager
+def fresh_database() -> Iterator[str]:
+    """A database URL for one test (or one module-scoped scenario).
+
+    SQLite by default: an empty URL means "a file in the data dir". Set
+    ``OPSMITH_TEST_DATABASE_URL`` to a PostgreSQL URL whose user may create databases, and a
+    new database is created for the caller and dropped afterwards. CI runs the whole suite
+    both ways.
+    """
+    admin_url = os.environ.get("OPSMITH_TEST_DATABASE_URL", "")
+    if not admin_url:
+        yield ""
+        return
+    url = make_url(admin_url)
+    name = f"opsmith_test_{uuid.uuid4().hex[:16]}"
+    admin = create_engine(url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(text(f'CREATE DATABASE "{name}"'))
+    try:
+        yield url.set(database=name).render_as_string(hide_password=False)
+    finally:
+        close_all_sessions()
+        for engine in _ENGINES:
+            engine.dispose()
+        _ENGINES.clear()
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+
+
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def database_url() -> Iterator[str]:
+    with fresh_database() as url:
+        yield url
+
+
+@pytest.fixture
+def settings(tmp_path: Path, database_url: str) -> Settings:
     return Settings(
-        data_dir=tmp_path / "data", log_json=False, sandbox_backend="local", local_root=tmp_path
+        data_dir=tmp_path / "data",
+        log_json=False,
+        sandbox_backend="local",
+        local_root=tmp_path,
+        database_url=database_url,
     )
 
 
 @pytest.fixture
 def platform(settings: Settings) -> Platform:
-    return Platform(settings)
+    platform = Platform(settings)
+    _ENGINES.append(platform.db.engine)
+    return platform
 
 
 @dataclass
@@ -193,3 +246,17 @@ def drain(platform: Platform) -> Callable[[], list[Any]]:
         return platform.worker().drain()
 
     return _drain
+
+
+@pytest.fixture(autouse=True)
+def only_fake_scanners(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not depend on which scanners the host happens to have installed (ruff is in
+    the dev environment; trivy or semgrep may or may not be). An external tool counts as
+    available only when a test put a fake one on PATH under ``<tmp_path>/fakebin``."""
+    fakebin = tmp_path / "fakebin"
+
+    def available(self: external.ExternalTool) -> bool:
+        found = shutil.which(self.binary)
+        return found is not None and Path(found).parent == fakebin
+
+    monkeypatch.setattr(external.ExternalTool, "available", available)

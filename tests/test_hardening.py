@@ -24,6 +24,7 @@ from opsmith.config import (
     resolve_tenant_credential,
 )
 from opsmith.db import utcnow
+from opsmith.etl.features import metric_signal
 from opsmith.executor.agents import AgentBudget, AgentResult, AgentTask
 from opsmith.executor.sandbox import (
     DockerSandbox,
@@ -766,3 +767,25 @@ def test_full_execution_through_the_docker_sandbox(platform, seed, drain) -> Non
     shown = run_git(["show", "--stat", "--format=%an", _pr_branches(seed)], seed.repo_path)
     assert "Opsmith Bot" in shown
     assert ".opsmith-home" not in shown
+
+
+def test_disabled_connector_refuses_pushes(client, platform, seed) -> None:
+    with platform.db.session() as s:
+        s.get(type(seed.log_connector), seed.log_connector.id).enabled = False
+    record = {"timestamp": utcnow().isoformat(), "service": "payments-api", "message": "x"}
+    resp = client.post(
+        f"/api/v1/connectors/{seed.log_connector.id}/push",
+        json=[record],
+        headers=_h(seed, "service"),
+    )
+    assert resp.status_code == 409
+
+
+def test_long_metric_series_keep_a_bounded_stable_signal() -> None:
+    short = metric_signal("latency_ms{route=/pay}")
+    assert short == "metric:latency_ms{route=/pay}"
+    labels = ",".join(f"label{i}=value-{i:04d}" for i in range(40))
+    one, two = metric_signal(f"latency_ms{{{labels}}}"), metric_signal(f"latency_ms{{{labels}x}}")
+    assert len(one) == len(two) == 200
+    assert one != two  # distinct series stay distinct after bounding
+    assert one == metric_signal(f"latency_ms{{{labels}}}")  # and stable across runs

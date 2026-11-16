@@ -1,11 +1,11 @@
 """MVP acceptance criteria (spec section 11), asserted against the full offline scenario."""
 
-import os
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
+from opsmith.audits import external
 from opsmith.config import Settings
 from opsmith.demo import run_demo
 from opsmith.gitutil import run_git
@@ -21,6 +21,7 @@ from opsmith.models import (
 )
 from opsmith.platform import Platform
 from opsmith.provenance import task_provenance
+from tests.conftest import fresh_database
 
 pytestmark = pytest.mark.e2e
 
@@ -28,18 +29,22 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory: pytest.TempPathFactory):
     base: Path = tmp_path_factory.mktemp("demo")
-    result = run_demo(base, verbose=False)
-    # OPSMITH_DATABASE_URL lets CI run the same acceptance suite against PostgreSQL.
-    platform = Platform(
-        Settings(
-            data_dir=result.data_dir,
-            log_json=False,
-            database_url=os.environ.get("OPSMITH_DATABASE_URL", ""),
-            sandbox_backend="local",
-            local_root=base,
+    # SQLite by default; a fresh PostgreSQL database when OPSMITH_TEST_DATABASE_URL is set.
+    with fresh_database() as database_url, pytest.MonkeyPatch.context() as patch:
+        # Built-in analyzers only: the scenario must not vary with the host's scanners.
+        patch.setattr(external.ExternalTool, "available", lambda _self: False)
+        result = run_demo(base, verbose=False, database_url=database_url)
+        platform = Platform(
+            Settings(
+                data_dir=result.data_dir,
+                log_json=False,
+                database_url=database_url,
+                sandbox_backend="local",
+                local_root=base,
+            )
         )
-    )
-    return result, platform
+        yield result, platform
+        platform.db.engine.dispose()
 
 
 def test_1_logs_metrics_repo_produce_ranked_tasks_without_intervention(demo) -> None:

@@ -35,7 +35,7 @@ jobs:
       - run: uv run pytest -q --cov --cov-report=term
 
   postgres:
-    name: acceptance suite on PostgreSQL
+    name: full suite on PostgreSQL
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -49,7 +49,8 @@ jobs:
           --health-cmd "pg_isready -U opsmith" --health-interval 5s --health-timeout 3s
           --health-retries 20
     env:
-      OPSMITH_DATABASE_URL: postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith
+      # Every test gets its own freshly created database (see tests/conftest.py).
+      OPSMITH_TEST_DATABASE_URL: postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -60,14 +61,26 @@ jobs:
       - run: |
           git config --global user.name "ci"
           git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
       - run: uv sync --frozen --all-extras
-      - run: uv run pytest -q tests/test_e2e.py
+      - run: uv run pytest -q
 
   docker:
-    name: container image
+    name: container image and compose files
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker build --target runtime -t opsmith:ci .
       - run: docker build --target dev -t opsmith-dev:ci .
       - run: docker run --rm opsmith-dev:ci pytest -q -x
+      - name: Compose refuses to start without a database password
+        run: |
+          if POSTGRES_PASSWORD= docker compose config -q 2>/dev/null; then
+            echo "docker-compose.yml accepted an empty POSTGRES_PASSWORD" >&2
+            exit 1
+          fi
+      - name: Compose files are valid
+        run: |
+          POSTGRES_PASSWORD=ci docker compose config -q
+          POSTGRES_PASSWORD=ci DOCKER_GID=999 OPSMITH_WORK_DIR=/var/lib/opsmith/work \
+            docker compose -f docker-compose.yml -f docker-compose.sandbox.yml config -q
