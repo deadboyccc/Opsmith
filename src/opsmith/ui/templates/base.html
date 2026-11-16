@@ -22,7 +22,7 @@
       <a href="/ui/config{{ pq }}">Configuration</a>
       <a href="/ui/jobs">Jobs</a>
     </nav>
-    <span class="who">{{ user.name }} · {{ user.role }} · <a href="/ui/logout">Sign out</a></span>
+    <span class="who">{{ user.name }} · {{ user.role }} · <form class="inline" method="post" action="/ui/logout"><button class="linklike" type="submit">Sign out</button></form></span>
     {% endif %}
   </div>
 </header>

@@ -67,3 +67,6 @@ button.danger { background: var(--bad); color: #fff; }
 .narrow { max-width: 420px; margin: 40px auto; }
 .prewrap { white-space: pre-wrap; }
 textarea.tall { min-height: 420px; }
+button.linklike { background: none; color: var(--accent); padding: 0; font-weight: inherit;
+  font-size: inherit; border-radius: 0; }
+button.linklike:hover { text-decoration: underline; }

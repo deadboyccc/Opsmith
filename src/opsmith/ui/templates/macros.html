@@ -5,3 +5,10 @@
 <span class="chip {{ cls }}">{{ s or "—" }}</span>
 {%- endmacro %}
 {% macro dt(v) -%}{{ v.strftime("%Y-%m-%d %H:%M") if v else "—" }}{%- endmacro %}
+{# A stored URL (PR links come from the SCM API or are local://...) becomes a link only when
+   it is http(s); anything else, e.g. javascript:, is shown as text. #}
+{% macro ext_link(url, text) -%}
+{%- if url and url.lower().startswith(("http://", "https://")) -%}
+<a href="{{ url }}" rel="noopener noreferrer">{{ text }}</a>
+{%- else -%}{{ text }}{%- endif -%}
+{%- endmacro %}

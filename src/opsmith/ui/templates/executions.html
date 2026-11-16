@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import status, dt %}
+{% from "macros.html" import status, dt, ext_link %}
 {% block head %}{% if live %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block title %}Executions{% endblock %}
 {% block content %}
@@ -10,7 +10,7 @@
 <tr><td>{{ status(r.status) }}</td><td><a href="/ui/tasks/{{ r.task_id }}">{{ t.title if t else r.task_id }}</a>{% if r.error %}<br><span class="s-bad">{{ r.error[:160] }}</span>{% endif %}</td>
 <td>{{ r.attempt }}</td><td>{{ r.agent }}</td><td>{{ r.changed_files|length }}</td>
 <td>{% for c in r.checks %}<span class="chip {{ 's-ok' if c.exit_code == 0 else 's-bad' }}">{{ c.name }}</span> {% endfor %}</td>
-<td>{% if r.pr_url %}<a href="{{ r.pr_url }}">#{{ r.pr_number }}</a> {{ status(t.ci_status) if t and t.ci_status else "" }}{% else %}—{% endif %}</td>
+<td>{% if r.pr_url %}{{ ext_link(r.pr_url, "#" ~ r.pr_number) }} {{ status(t.ci_status) if t and t.ci_status else "" }}{% else %}—{% endif %}</td>
 <td>{{ dt(r.started_at) }}</td></tr>
 {% else %}<tr><td colspan="8" class="muted">No executions yet.</td></tr>{% endfor %}</table></div>
 {% endblock %}

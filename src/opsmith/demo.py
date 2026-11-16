@@ -295,7 +295,7 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
                 tenant_id=tenant.id,
                 kind="inference",
                 payload={"service_id": ids["service"], "slot": slot},
-                idempotency_key=f"demo:inference:{slot}",
+                idempotency_key=f"demo:{tenant.id}:inference:{slot}",
             )
         _drain(platform)  # inference + aggregation + notifications
 
@@ -327,7 +327,7 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
             tenant_id=tenant.id,
             kind="audit",
             payload={"repository_id": ids["repo"], "mode": "full"},
-            idempotency_key="demo:audit:1",
+            idempotency_key=f"demo:{tenant.id}:audit:1",
         )
     _drain(platform)
     say("audit: secrets, bug and performance analyzers + triage; findings correlated")
@@ -373,7 +373,7 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
             tenant_id=tenant.id,
             kind="track_prs",
             payload={"project_id": ids["project"]},
-            idempotency_key="demo:track:1",
+            idempotency_key=f"demo:{tenant.id}:track:1",
         )
     _drain(platform)
 
@@ -393,7 +393,7 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
             tenant_id=tenant.id,
             kind="track_prs",
             payload={"project_id": ids["project"]},
-            idempotency_key="demo:track:2",
+            idempotency_key=f"demo:{tenant.id}:track:2",
         )
     _drain(platform)
 

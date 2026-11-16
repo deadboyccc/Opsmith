@@ -5,6 +5,7 @@ SameSite=Strict cookie; every POST is a form handled by the same services as the
 import json
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -58,10 +59,41 @@ UIUser = Annotated[User, Depends(ui_user)]
 
 
 def _check_origin(request: Request) -> None:
-    """Defence in depth on top of SameSite=Strict: reject cross-origin form posts."""
+    """Defence in depth on top of SameSite=Strict: reject cross-origin form posts.
+
+    The Origin's host[:port] must be the host this request was addressed to. The scheme is not
+    compared: behind a TLS-terminating proxy the browser's origin is https while this process
+    is reached over http. An Origin that is not an http(s) origin (``null``) is rejected."""
     origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+    if origin is None:
+        return  # not sent on same-origin form posts by some clients; SameSite still applies
+    parts = urlsplit(origin)
+    host = request.headers.get("host", "")
+    if parts.scheme not in {"http", "https"} or not host or parts.netloc.lower() != host.lower():
         raise HTTPException(403, "cross-origin form post rejected")
+
+
+def _error_text(exc: Exception) -> str:
+    """One line a person can act on: for a validation error, the first failing field and why
+    (pydantic's own first line only says how many errors there were)."""
+    if isinstance(exc, ValidationError):
+        errors = exc.errors(include_url=False)
+        loc = ".".join(str(part) for part in errors[0]["loc"])
+        text = f"{loc}: {errors[0]['msg']}" if loc else str(errors[0]["msg"])
+        if len(errors) > 1:
+            text += f" (+{len(errors) - 1} more)"
+    else:
+        text = (str(exc).splitlines() or ["invalid input"])[0]
+    return text[:200]
+
+
+def _error_query(exc: Exception) -> str:
+    """``error=...`` for a redirect, fully encoded: the text may hold ``&``, ``#``, ``+``."""
+    return "error=" + quote(_error_text(exc), safe="")
+
+
+def _form_text(value: str | None) -> str:
+    return (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def _render(request: Request, name: str, user: User | None, **ctx: Any) -> HTMLResponse:
@@ -85,7 +117,9 @@ def _current_project(session: SessionDep, user: User, project_id: str | None) ->
 
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request, error: str | None = None) -> HTMLResponse:
-    return _render(request, "login.html", None, error=error)
+    # This page needs no session, so the query text is never echoed: anyone could craft a link
+    # that puts their own message on it. The parameter only switches a fixed message on.
+    return _render(request, "login.html", None, error="Invalid API key" if error else None)
 
 
 @router.post("/login")
@@ -93,21 +127,25 @@ def login(request: Request, session: SessionDep, api_key: Annotated[str, Form()]
     _check_origin(request)
     user = authenticate(session, api_key)
     if user is None or user.role not in HUMAN_ROLES:
-        return RedirectResponse("/ui/login?error=Invalid+API+key", status_code=303)
+        return RedirectResponse("/ui/login?error=1", status_code=303)
     resp = RedirectResponse("/ui", status_code=303)
     resp.set_cookie(
         COOKIE,
         api_key,
         httponly=True,
         samesite="strict",
-        secure=request.url.scheme == "https",
+        # Behind a TLS-terminating proxy the request arrives as http; the Origin (already
+        # checked against Host above) still says the browser is on https.
+        secure=request.url.scheme == "https"
+        or request.headers.get("origin", "").lower().startswith("https://"),
         max_age=12 * 3600,
     )
     return resp
 
 
-@router.get("/logout")
-def logout() -> Response:
+@router.post("/logout")
+def logout(request: Request) -> Response:
+    _check_origin(request)
     resp = RedirectResponse("/ui/login", status_code=303)
     resp.delete_cookie(COOKIE)
     return resp
@@ -195,7 +233,7 @@ def task_list(
         project=project,
         projects=_projects(session, user),
         tasks=tasks,
-        status=status,
+        status_filter=status,  # not "status": the templates import a macro of that name
     )
 
 
@@ -237,11 +275,14 @@ def task_review(
 ) -> Response:
     _check_origin(request)
     task = owned(session, Task, task_id, user.tenant_id)
+    # The form posts the current title and approach back. A browser submits textarea newlines
+    # as CRLF, so compare normalized text on both sides: an untouched form is not an edit.
     edits: dict[str, Any] = {}
-    if edit_title.strip() and edit_title.strip() != task.title:
-        edits["title"] = edit_title.strip()
-    if edit_approach.strip() and edit_approach.strip() != task.proposed_approach:
-        edits["proposed_approach"] = edit_approach.strip()
+    title, approach = _form_text(edit_title), _form_text(edit_approach)
+    if title and title != _form_text(task.title):
+        edits["title"] = title
+    if approach and approach != _form_text(task.proposed_approach):
+        edits["proposed_approach"] = approach
     if edit_priority and edit_priority != task.priority:
         edits["priority"] = edit_priority
     if decision == "approve" and edits:
@@ -259,8 +300,7 @@ def task_review(
         platform.reviews.review(session, task, user, req)
     except (ReviewError, ValidationError) as exc:
         session.rollback()
-        msg = str(exc).splitlines()[0][:200]
-        return RedirectResponse(f"/ui/tasks/{task_id}?error={msg}", status_code=303)
+        return RedirectResponse(f"/ui/tasks/{task_id}?{_error_query(exc)}", status_code=303)
     return RedirectResponse(f"/ui/tasks/{task_id}", status_code=303)
 
 
@@ -365,8 +405,9 @@ def save_settings(
     try:
         settings = ProjectSettings.model_validate(json.loads(settings_json))
     except (ValueError, ValidationError) as exc:
-        msg = str(exc).splitlines()[0][:200]
-        return RedirectResponse(f"/ui/config?project_id={project_id}&error={msg}", status_code=303)
+        return RedirectResponse(
+            f"/ui/config?project_id={project_id}&{_error_query(exc)}", status_code=303
+        )
     project.settings = settings.model_dump(mode="json")
     audit_log.record(
         session,
@@ -389,7 +430,12 @@ def jobs_page(
         q = q.where(Job.status == status)
     jobs = list(session.scalars(q.order_by(Job.created_at.desc()).limit(200)).all())
     return _render(
-        request, "jobs.html", user, jobs=jobs, status=status, is_admin=user.role == "admin"
+        request,
+        "jobs.html",
+        user,
+        jobs=jobs,
+        status_filter=status,  # not "status": the template imports a macro of that name
+        is_admin=user.role == "admin",
     )
 
 

@@ -35,12 +35,12 @@
 
 <h2>Inference runs</h2>
 <div class="table-wrap"><table><tr><th>Run</th><th>Slot</th><th>Model</th><th>Bundles</th><th>Leads in</th><th>Cost</th><th>Status</th></tr>
-{% for r in inference %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.slot }}</td><td>{{ r.model }}</td><td>{{ r.input_bundle_ids|length }}</td><td>{{ r.input_leads|length }}</td><td>${{ "%.4f"|format(r.cost_usd) }}</td><td>{{ status(r.status) }}</td></tr>
+{% for r in inference %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.slot }}</td><td>{{ r.model }}</td><td>{{ r.input_bundle_ids|length }}</td><td>{{ r.input_leads|length }}</td><td>${{ "%.4f"|format(r.cost_usd) }}</td><td>{{ status(r.status) }}{% if r.error %}<br><span class="muted">{{ r.error[:200] }}</span>{% endif %}</td></tr>
 {% else %}<tr><td colspan="7" class="muted">No runs yet</td></tr>{% endfor %}</table></div>
 
 <h2>Audit runs</h2>
 <div class="table-wrap"><table><tr><th>Run</th><th>Mode</th><th>Commit</th><th>Files</th><th>Findings</th><th>Status</th><th>Started</th></tr>
-{% for r in audits %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.mode }}</td><td><code>{{ (r.commit_sha or "")[:10] }}</code></td><td>{{ r.files_analyzed }}</td><td>{{ r.findings_count }}</td><td>{{ status(r.status) }}</td><td>{{ dt(r.started_at) }}</td></tr>
+{% for r in audits %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.mode }}</td><td><code>{{ (r.commit_sha or "")[:10] }}</code></td><td>{{ r.files_analyzed }}</td><td>{{ r.findings_count }}</td><td>{{ status(r.status) }}{% if r.error %}<br><span class="muted">{{ r.error[:200] }}</span>{% endif %}</td><td>{{ dt(r.started_at) }}</td></tr>
 {% else %}<tr><td colspan="7" class="muted">No audits yet</td></tr>{% endfor %}</table></div>
 {% endif %}
 {% endblock %}

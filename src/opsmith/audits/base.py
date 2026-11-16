@@ -17,6 +17,10 @@ from opsmith.schemas import ProjectSettings
 
 log = logging.getLogger(__name__)
 MAX_FILE_BYTES = 1_000_000
+# Regexes are only ever run against this much of one line. Repository content is untrusted and
+# several detectors backtrack quadratically on a long line, so a single-line megabyte file
+# would otherwise occupy the worker for minutes. Anything past the cap is not scanned.
+MAX_LINE_CHARS = 10_240
 SKIP_DIRS = {
     ".git",
     "node_modules",
@@ -47,10 +51,15 @@ class RawFinding:
     snippet: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def fingerprint(self, repository_id: str) -> str:
+    def fingerprint(self, repository_id: str, occurrence: int = 0) -> str:
+        """Identity of the finding across commits. ``occurrence`` numbers further findings in
+        one run that would otherwise share it (the same rule on identical lines of one file):
+        the first keeps the plain fingerprint, each later one gets its own."""
         # Line numbers shift between commits; the normalized snippet does not.
         norm = " ".join(self.snippet.split())[:200]
         raw = f"{repository_id}|{self.rule_id}|{self.path or ''}|{norm}"
+        if occurrence:
+            raw += f"|#{occurrence}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -83,6 +92,16 @@ class AuditContext:
             text = self.read(rel)
             if text is not None:
                 yield rel, text
+
+
+class AnalyzerError(RuntimeError):
+    """An analyzer failed part-way. ``findings`` holds what it had produced until then, so the
+    runner keeps those and still records the failure on the run (nothing is dropped, and the
+    failure is not mistaken for a clean result)."""
+
+    def __init__(self, message: str, findings: list[RawFinding] | None = None) -> None:
+        super().__init__(message)
+        self.findings: list[RawFinding] = findings or []
 
 
 class Analyzer(ABC):

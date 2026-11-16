@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from opsmith import audit_log, queue
 from opsmith.audits.base import (
+    AnalyzerError,
     AnalyzerFactory,
     AuditContext,
     RawFinding,
@@ -60,6 +61,7 @@ class AuditRunner:
         assert project is not None
         settings = ProjectSettings.model_validate(project.settings)
         types = audit_types or list(repo.audit_types)
+        started = utcnow()
         path = self.scm.for_provider(repo.scm_provider).checkout(repo, self.workdir / repo.id)
         head = head_sha(path)
         all_files = iter_repo_files(path)
@@ -76,18 +78,6 @@ class AuditRunner:
         else:
             mode = "full"
 
-        run = AuditRun(
-            tenant_id=repo.tenant_id,
-            project_id=project.id,
-            repository_id=repo.id,
-            audit_types=types,
-            mode=mode,
-            commit_sha=head,
-            base_sha=base,
-            files_analyzed=len(files),
-        )
-        session.add(run)
-        session.flush()
         ctx = AuditContext(
             repo_path=path,
             repository_id=repo.id,
@@ -98,6 +88,7 @@ class AuditRunner:
         )
         raws: list[RawFinding] = []
         tools: dict[str, str] = {}
+        failed: list[str] = []
         with METRICS.timer("opsmith_stage_seconds", stage="audit"):
             for analyzer in self.analyzer_factory(types):
                 if not analyzer.available():
@@ -107,16 +98,40 @@ class AuditRunner:
                     raws.extend(analyzer.analyze(ctx))
                     tools[analyzer.name] = analyzer.version()
                 except Exception as exc:  # one broken tool must not sink the run
+                    if isinstance(exc, AnalyzerError):
+                        raws.extend(exc.findings)  # what it found before it failed
                     tools[analyzer.name] = f"error: {exc}"[:200]
+                    failed.append(analyzer.name)
                     log.exception("analyzer failed", extra={"analyzer": analyzer.name})
+
+        # The checkout and the analyzers (minutes on a large repository) ran before anything
+        # was written, so the audit's write transaction only starts here.
+        run = AuditRun(
+            tenant_id=repo.tenant_id,
+            project_id=project.id,
+            repository_id=repo.id,
+            audit_types=types,
+            mode=mode,
+            commit_sha=head,
+            base_sha=base,
+            files_analyzed=len(files),
+            started_at=started,
+        )
+        session.add(run)
+        session.flush()
         decisions = self._triage(session, project, run, raws)
-        seen: set[str] = set()
+        places: dict[str, list[tuple[Any, Any]]] = {}  # fingerprint -> (line, column) seen
         kept = 0
         for idx, raw in enumerate(raws):
-            fp = raw.fingerprint(repo.id)
-            if fp in seen:
-                continue
-            seen.add(fp)
+            earlier = places.setdefault(raw.fingerprint(repo.id), [])
+            place = (raw.line, raw.extra.get("column"))
+            if place in earlier:
+                continue  # same rule, file, text and position: one finding, whoever reports it
+            # The fingerprint ignores line numbers, so the same rule on identical lines of one
+            # file collides. Those are distinct findings and each is kept: the first under the
+            # plain fingerprint, later ones numbered in report order.
+            fp = raw.fingerprint(repo.id, occurrence=len(earlier))
+            earlier.append(place)
             keep, confidence, rationale, severity = decisions.get(
                 idx, (True, raw.confidence, "not triaged", None)
             )
@@ -124,17 +139,19 @@ class AuditRunner:
                 Finding(
                     tenant_id=repo.tenant_id,
                     project_id=project.id,
-                    source=f"audit:{raw.analyzer}",
+                    source=f"audit:{raw.analyzer}"[:80],
                     source_run_id=run.id,
                     category=raw.category,
-                    rule_id=raw.rule_id,
-                    title=raw.title,
-                    description=raw.description,
+                    # Paths and tool output come from the repository; clip them to the column
+                    # sizes so one over-long value cannot fail the whole audit on PostgreSQL.
+                    rule_id=raw.rule_id[:120],
+                    title=raw.title[:300],
+                    description=raw.description or "",
                     severity=severity or raw.severity,
                     confidence=round(confidence, 3),
                     evidence_refs=[f"audit:{run.id}#{fp[:12]}"],
                     repository_id=repo.id,
-                    path=raw.path,
+                    path=raw.path[:500] if raw.path else raw.path,
                     line=raw.line,
                     fingerprint=fp,
                     evidence_strength=_STRENGTH[True],
@@ -153,7 +170,13 @@ class AuditRunner:
         run.findings_count = kept
         run.status = "succeeded"
         run.finished_at = utcnow()
-        repo.last_audited_sha = head
+        if failed:
+            # Stays on the finished run next to the per-tool detail in ``tool_versions``. The
+            # audited commit is not advanced: the next incremental run diffs from the same
+            # base again, so the files this run's failed analyzers missed are not skipped.
+            run.error = f"analyzers failed: {', '.join(failed)}"
+        else:
+            repo.last_audited_sha = head
         audit_log.record(
             session,
             tenant_id=repo.tenant_id,

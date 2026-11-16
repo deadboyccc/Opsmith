@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import status, dt %}
+{% from "macros.html" import status, dt, ext_link %}
 {% block title %}{{ task.title }}{% endblock %}
 {% block content %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
@@ -8,7 +8,7 @@
 <span class="chip">{{ task.category }}</span> <span class="chip">severity {{ task.severity }}</span>
 <span class="chip">confidence {{ "%.2f"|format(task.confidence) }}</span>
 {% if task.protection != "none" %}<span class="chip s-warn">protected: {{ task.protection }}</span>{% endif %}
-{% if task.pr_url %}<a href="{{ task.pr_url }}">PR #{{ task.pr_number }}</a> {{ status(task.ci_status) }}{% endif %}</p>
+{% if task.pr_url %}{{ ext_link(task.pr_url, "PR #" ~ task.pr_number) }} {{ status(task.ci_status) }}{% endif %}</p>
 
 <div class="row">
 <div class="card"><div class="label">Problem</div><p class="prewrap">{{ task.problem_statement }}</p>
@@ -51,7 +51,7 @@ Watch: {{ task.verification.get("metrics_to_watch", [])|join(", ") or "—" }}</
 <h2>Provenance: raw signal → PR</h2>
 <div class="card"><ol class="chain">
   {% for e in prov.executions %}<li>Execution <code>{{ e.id }}</code> attempt {{ e.attempt }} ({{ e.agent }}) {{ status(e.status) }}
-    {% if e.pr_url %}→ <a href="{{ e.pr_url }}">{{ e.pr_url }}</a>{% endif %}{% if e.error %} <span class="s-bad">{{ e.error }}</span>{% endif %}</li>{% endfor %}
+    {% if e.pr_url %}→ {{ ext_link(e.pr_url, e.pr_url) }}{% endif %}{% if e.error %} <span class="s-bad">{{ e.error }}</span>{% endif %}</li>{% endfor %}
   {% for r in prov.reviews %}<li>Review by <b>{{ r.reviewer_name }}</b> ({{ r.reviewer_role }}): {{ r.decision }}{% if r.reason_code %} · {{ r.reason_code }}{% endif %} · {{ r.created_at[:16] }}</li>{% endfor %}
   {% for f in prov.findings %}<li>Finding <code>{{ f.id }}</code> [{{ f.source }}] {{ f.title }}
     {% if f.path %}<code>{{ f.path }}{% if f.line %}:{{ f.line }}{% endif %}</code>{% endif %}
