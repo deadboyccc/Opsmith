@@ -17,6 +17,7 @@ For people who run it: evaluating it, configuring projects, operating a deployme
 | [Operations](guide/operations.md) | Monitor it, upgrade it, troubleshoot it |
 | [API](guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](guide/security.md) | Know what is guaranteed, how, which test proves it, and what is not protected |
+| [Compatibility](guide/compatibility.md) | See which versions of Loki, Prometheus, GitHub, models, Python, PostgreSQL and Docker are verified, and how |
 
 ## Developing Opsmith
 

@@ -199,7 +199,8 @@ Honest scope, so you can judge it:
 | Docker sandbox | Tested with **real containers** (network, filesystem, capabilities, timeouts, and a full execution). Skipped automatically where Docker is absent |
 | Compose deployment | Built and started end to end, including the worker starting sandbox containers through the overlay |
 | Documentation | Every command in [Getting started](docs/guide/getting-started.md) was run as written. A check in CI compares the docs with the code: links, cited tests, environment variables, settings, API endpoints, events, connector types, states and commands |
-| GitHub, Loki, Prometheus | Tested against **mocked HTTP** only. Not yet exercised against live services in CI |
+| Loki, Prometheus | Run **against real servers** in CI on every push: Loki 2.9 and 3.7, Prometheus 2.53, 3.5 and 3.16. See the [compatibility matrix](docs/guide/compatibility.md) |
+| GitHub | Tested against **mocked HTTP** only. Not yet exercised against github.com in CI |
 | Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested against **fake clients** only |
 | Production use | None yet. No load tests, no long-running deployment |
 
@@ -224,6 +225,7 @@ The full index is in [docs/README.md](docs/README.md). The pages are split by re
 | [Operations](docs/guide/operations.md) | Monitor, upgrade and troubleshoot it |
 | [API](docs/guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](docs/guide/security.md) | Know what is guaranteed, which test proves it, and what is not protected |
+| [Compatibility](docs/guide/compatibility.md) | See which versions of Loki, Prometheus and the rest are verified, and how |
 
 **Developing Opsmith**
 

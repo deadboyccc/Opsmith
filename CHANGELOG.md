@@ -6,6 +6,13 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Added
+
+- A [compatibility matrix](docs/guide/compatibility.md): what Opsmith talks to, which versions
+  are verified and how. The Loki and Prometheus connectors now run against real servers in CI
+  on every push (Loki 2.9.17 and 3.7.10; Prometheus v2.53.5, v3.5.5 and v3.16.0), through
+  `tests/test_connectors_live.py`.
+
 ### Fixed
 
 - **The Prometheus connector could read past the end of its window.** It rounded the window's

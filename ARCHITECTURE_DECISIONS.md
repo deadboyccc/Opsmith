@@ -357,4 +357,5 @@ calls) are preserved by every decision below.
   the evidence at rejection; they do not accumulate across batches.
 - The heuristic provider is rule-based. Real analysis quality comes from the Claude provider,
   and has not been measured: there is no evaluation set yet.
-- GitHub, Loki and Prometheus integrations are tested against mocked HTTP only.
+- The GitHub integration is tested against mocked HTTP only. Loki and Prometheus run against
+  real servers in CI ([compatibility matrix](docs/guide/compatibility.md)).

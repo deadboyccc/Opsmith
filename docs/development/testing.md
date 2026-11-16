@@ -20,7 +20,7 @@ uv run pytest tests/test_llm.py -q  # one area while you iterate
 uv run pytest -k "budget" -q        # by name
 ```
 
-Four parts of the suite depend on something outside Python. Each skips itself, with a reason,
+Five parts of the suite depend on something outside Python. Each skips itself, with a reason,
 when that thing is missing:
 
 | What | How to run it | Needs |
@@ -29,6 +29,7 @@ when that thing is missing:
 | **PostgreSQL** | `OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db uv run pytest -q` | A server whose user may create databases. Every test gets its own database, dropped afterwards |
 | **Real sandbox containers** | `uv run pytest -m docker` | A Docker daemon and the `busybox:stable` and `python:3.12-slim` images |
 | **A live model endpoint** | `OPSMITH_TEST_OPENAI_BASE_URL=http://localhost:11434/v1 OPSMITH_TEST_OPENAI_MODEL=qwen2.5:1.5b uv run pytest tests/test_openai_provider.py -k live` | Any OpenAI-compatible server, for example Ollama with a small model |
+| **Real Loki and Prometheus** | `OPSMITH_TEST_LOKI_URL=http://127.0.0.1:3100 OPSMITH_TEST_PROMETHEUS_URL=http://127.0.0.1:9090 uv run pytest tests/test_connectors_live.py` | A Loki and a Prometheus with default settings, for example `docker run -p 3100:3100 grafana/loki:3.7.10` and `docker run -p 9090:9090 prom/prometheus:v3.16.0`. Either URL alone runs that half |
 
 A PostgreSQL to test against:
 
@@ -58,6 +59,8 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 | `test_llm.py`, `test_openai_provider.py` | The gateway and the two remote providers, against fake clients and a scripted endpoint |
 | `test_queue_scheduler.py`, `test_notifications.py`, `test_scm_tracking.py` | Infrastructure |
 | `test_api.py`, `test_cli.py` | The REST API, the UI routes and the command line |
+| `test_migrations.py` | The schema migrations match the models; adopting 1.0.0 databases; refusing older and newer ones; concurrent starts on PostgreSQL |
+| `test_connectors_live.py` | The Loki and Prometheus connectors against real servers (skipped without them) |
 
 `conftest.py` provides the fixtures nearly every test uses:
 
@@ -89,6 +92,7 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 |---|---|
 | `lint, types, tests` | ruff, format check, mypy, the suite with coverage. Docker is available, so the container tests run |
 | `full suite on PostgreSQL` | The whole suite with `OPSMITH_TEST_DATABASE_URL` set |
+| `loki …`, `prometheus …` | One job per server version in the [compatibility matrix](../guide/compatibility.md): starts that server and runs `tests/test_connectors_live.py` against it |
 | `container image and compose files` | Builds both images, runs the suite inside the dev image, and checks that Compose refuses an empty database password |
 
 `.github/workflows/live-models.yml` is separate, because it is slow: it starts Ollama with a
