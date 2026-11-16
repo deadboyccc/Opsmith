@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from opsmith import demo as demo_module
 from opsmith.api import ui
 from opsmith.api.app import create_app
 from opsmith.demo import run_demo
@@ -242,9 +243,15 @@ def test_logout_is_a_post_form(client, seed) -> None:
 # --------------------------------------------------------------------------- demo
 
 
-def test_demo_runs_twice_into_the_same_directory(tmp_path: Path) -> None:
+def test_demo_runs_twice_into_the_same_directory(tmp_path: Path, monkeypatch) -> None:
     """Its job keys are scoped to the demo tenant; fixed keys made a second run reuse the first
-    run's finished jobs and stop with no tasks."""
+    run's finished jobs and stop with no tasks.
+
+    The clock the demo reads is frozen, so both runs start in the same second every time: the
+    tenant name used to be derived from that second alone, which made this collide on some
+    runs and not on others."""
+    frozen = demo_module.utcnow()
+    monkeypatch.setattr(demo_module, "utcnow", lambda: frozen)
     first = run_demo(tmp_path / "demo", verbose=False)
     second = run_demo(tmp_path / "demo", verbose=False)
     assert (first.final_status, second.final_status) == ("verified", "verified")

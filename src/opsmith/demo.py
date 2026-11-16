@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from opsmith import queue
 from opsmith.config import Settings
-from opsmith.db import utcnow
+from opsmith.db import new_id, utcnow
 from opsmith.gitutil import run_git
 from opsmith.models import Connector, Project, Repository, Service, Task, User
 from opsmith.platform import Platform
@@ -212,7 +212,9 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
     t0 = now - timedelta(hours=18)
 
     with platform.db.session() as s:
-        tenant = create_tenant(s, f"demo-{now:%H%M%S}")
+        # The random part keeps the name unique when the demo runs twice within one second
+        # against the same database (tenant names are unique).
+        tenant = create_tenant(s, f"demo-{now:%H%M%S}-{new_id('x')[-6:]}")
         admin, admin_key = create_user(s, tenant, "Demo Admin", "admin")
         reviewer, reviewer_key = create_user(s, tenant, "Riley Reviewer", "reviewer")
         project_settings = ProjectSettings(
