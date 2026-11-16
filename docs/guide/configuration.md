@@ -92,11 +92,16 @@ osv_online = false                  # look up dependency vulnerabilities at osv.
 
 | Setting | Allowed values |
 |---|---|
-| `inference_interval_hours` | Greater than 0 |
-| `lead_max_carry`, `audit_full_every_days`, `max_tasks_per_aggregation` | At least 1 |
+| `inference_interval_hours` | Greater than 0, at most 8760 (a year) |
+| `lead_max_carry` | 1 to 100 |
+| `audit_full_every_days` | 1 to 3650 |
+| `max_tasks_per_aggregation` | 1 to 1000 |
 | `audit_cron` | Five fields: minute, hour, day of month, month, day of week. Lists, ranges and steps are supported; names such as `MON` are not. An expression that can never fire (31 February) is rejected |
-| `ingest_interval_seconds`, `pr_poll_seconds` | At least 60 |
-| `recently_closed_days`, `verification_delay_hours` | 0 or more |
+| `ingest_interval_seconds` | 60 to 31536000 (a year) |
+| `pr_poll_seconds` | 60 to 604800 (a week) |
+| `recently_closed_days` | 0 to 3650 |
+| `verification_delay_hours` | 0 to 8760 |
+| `budgets.*` | Positive; at most 10^8 tokens, $100,000 per run, $1,000,000 per day, 86400 execution seconds, 1000 agent iterations, 100 concurrent executions |
 | `min_task_confidence` | 0 to 1 |
 
 Values are checked when you save them. A bad value is refused with a message; it cannot be

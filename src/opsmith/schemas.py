@@ -36,6 +36,15 @@ def _as_utc(value: datetime) -> datetime:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
 
 
+# Upper bounds for durations in settings. Without them a huge value is accepted and then
+# fails inside a job (``timedelta`` overflows; PostgreSQL's INTEGER holds at most 2**31 - 1).
+DAY_SECONDS = 86_400
+WEEK_SECONDS = 7 * DAY_SECONDS
+YEAR_SECONDS = 365 * DAY_SECONDS
+YEAR_HOURS = 365 * 24
+TEN_YEARS_DAYS = 3650
+
+
 class LogEvent(BaseModel):
     """Common event schema (spec 5.1) for log records."""
 
@@ -92,12 +101,12 @@ class ProtectedPath(BaseModel):
 class Budgets(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_tokens_per_run: int = Field(default=400_000, gt=0)
-    max_cost_per_run_usd: float = Field(default=5.0, ge=0)
-    max_cost_per_day_usd: float = Field(default=50.0, ge=0)
-    max_execution_seconds: int = Field(default=1800, gt=0)
-    max_agent_iterations: int = Field(default=8, ge=1)
-    max_concurrent_executions: int = Field(default=2, ge=1)
+    max_tokens_per_run: int = Field(default=400_000, gt=0, le=100_000_000)
+    max_cost_per_run_usd: float = Field(default=5.0, ge=0, le=100_000)
+    max_cost_per_day_usd: float = Field(default=50.0, ge=0, le=1_000_000)
+    max_execution_seconds: int = Field(default=1800, gt=0, le=DAY_SECONDS)
+    max_agent_iterations: int = Field(default=8, ge=1, le=1000)
+    max_concurrent_executions: int = Field(default=2, ge=1, le=100)
 
 
 class StageModel(BaseModel):
@@ -106,13 +115,13 @@ class StageModel(BaseModel):
     provider: str = "heuristic"
     model: str = "heuristic-v1"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
-    max_tokens: int = Field(default=16000, gt=0)
+    max_tokens: int = Field(default=16000, gt=0, le=1_000_000)
     # USD per million tokens, for cost accounting and the cost budgets. Optional: Opsmith has
     # list prices for the Claude models, and costs any other model at the most expensive rate
     # it knows, so a budget is never bypassed by an unpriced model. Set these to the real
     # rates of your model; use 0 for a local model.
-    input_price_per_mtok: float | None = Field(default=None, ge=0)
-    output_price_per_mtok: float | None = Field(default=None, ge=0)
+    input_price_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
+    output_price_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
 
     @property
     def prices(self) -> tuple[float, float] | None:
@@ -176,18 +185,18 @@ class ProjectSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    inference_interval_hours: float = Field(default=6.0, gt=0)
-    lead_max_carry: int = Field(default=3, ge=1)
+    inference_interval_hours: float = Field(default=6.0, gt=0, le=YEAR_HOURS)
+    lead_max_carry: int = Field(default=3, ge=1, le=100)
     audit_cron: str = "0 2 * * *"
-    audit_full_every_days: int = Field(default=7, ge=1)
-    ingest_interval_seconds: int = Field(default=900, ge=60)
-    pr_poll_seconds: int = Field(default=600, ge=60)
-    recently_closed_days: int = Field(default=14, ge=0)
+    audit_full_every_days: int = Field(default=7, ge=1, le=TEN_YEARS_DAYS)
+    ingest_interval_seconds: int = Field(default=900, ge=60, le=YEAR_SECONDS)
+    pr_poll_seconds: int = Field(default=600, ge=60, le=WEEK_SECONDS)
+    recently_closed_days: int = Field(default=14, ge=0, le=TEN_YEARS_DAYS)
     min_task_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
-    max_tasks_per_aggregation: int = Field(default=25, ge=1)
+    max_tasks_per_aggregation: int = Field(default=25, ge=1, le=1000)
     auto_submit_for_review: bool = True
     post_merge_verification: bool = True
-    verification_delay_hours: float = Field(default=6.0, ge=0)
+    verification_delay_hours: float = Field(default=6.0, ge=0, le=YEAR_HOURS)
     protected_paths: list[ProtectedPath] = Field(
         default_factory=lambda: [
             ProtectedPath(pattern=".github/**", mode="elevated"),

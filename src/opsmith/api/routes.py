@@ -43,7 +43,7 @@ from opsmith.platform import Platform
 from opsmith.provenance import task_provenance
 from opsmith.review import ReviewError, ReviewRequest
 from opsmith.scheduler import CronExpr, ensure_project_schedules, reschedule
-from opsmith.schemas import ProjectSettings
+from opsmith.schemas import YEAR_HOURS, YEAR_SECONDS, ProjectSettings
 
 router = APIRouter(prefix="/api/v1")
 # Any authenticated principal, including machine `service` keys (used only by /me).
@@ -100,7 +100,7 @@ class ServiceIn(_Strict):
     owner: str | None = Field(None, max_length=200)
     repository_id: str | None = None
     path_prefixes: list[str] = Field(default_factory=list)
-    inference_interval_hours: float | None = Field(None, gt=0)
+    inference_interval_hours: float | None = Field(None, gt=0, le=YEAR_HOURS)
 
 
 class ConnectorIn(_Strict):
@@ -109,13 +109,13 @@ class ConnectorIn(_Strict):
     config: dict[str, Any] = Field(default_factory=dict)
     credentials_ref: _CredentialsRef
     service_id: str | None = None
-    interval_seconds: int = Field(900, ge=60)
+    interval_seconds: int = Field(900, ge=60, le=YEAR_SECONDS)
     enabled: bool = True
 
 
 class ScheduleUpdate(_Strict):
     enabled: bool | None = None
-    interval_seconds: int | None = Field(None, ge=60)
+    interval_seconds: int | None = Field(None, ge=60, le=YEAR_SECONDS)
     cron: str | None = None
 
 

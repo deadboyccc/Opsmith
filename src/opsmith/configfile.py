@@ -15,7 +15,7 @@ from opsmith.config import CredentialRefError, check_credentials_ref
 from opsmith.connectors import available_types
 from opsmith.models import Connector, Project, Repository, Service, Tenant
 from opsmith.scheduler import ensure_project_schedules
-from opsmith.schemas import ProjectSettings
+from opsmith.schemas import YEAR_HOURS, YEAR_SECONDS, ProjectSettings
 
 _REPO_FIELDS = {
     "scm_provider",
@@ -75,8 +75,14 @@ def _validate_repository(data: dict[str, Any], what: str) -> None:
 
 def _validate_connector(data: dict[str, Any], what: str) -> None:
     interval = data.get("interval_seconds", 900)
-    if not isinstance(interval, int) or isinstance(interval, bool) or interval < 60:
-        raise ConfigError(f"{what}: interval_seconds must be an integer of at least 60")
+    if (
+        not isinstance(interval, int)
+        or isinstance(interval, bool)
+        or not 60 <= interval <= YEAR_SECONDS
+    ):
+        raise ConfigError(
+            f"{what}: interval_seconds must be an integer from 60 to {YEAR_SECONDS} (a year)"
+        )
     if not isinstance(data.get("config", {}), dict):
         raise ConfigError(f"{what}: config must be a table")
     _check_ref(data.get("credentials_ref"), what)
@@ -85,9 +91,12 @@ def _validate_connector(data: dict[str, Any], what: str) -> None:
 def _validate_service(data: dict[str, Any], what: str) -> None:
     hours = data.get("inference_interval_hours")
     if hours is not None and not (
-        isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0
+        isinstance(hours, (int, float)) and not isinstance(hours, bool) and 0 < hours <= YEAR_HOURS
     ):
-        raise ConfigError(f"{what}: inference_interval_hours must be a positive number")
+        raise ConfigError(
+            f"{what}: inference_interval_hours must be a positive number of at most "
+            f"{YEAR_HOURS} (a year)"
+        )
 
 
 def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list[Project]:

@@ -49,6 +49,11 @@ the database schema says so under *Upgrade notes*.
 - **Post-merge verification gave up silently** after four hours without data, which with the
   default daily audit left most code-only tasks `merged` for good. It now waits up to 48
   hours and then fails the job (dead, audited, notified) instead of succeeding quietly.
+- **Settings too large to use were accepted** and then failed inside every later job, for
+  example `recently_closed_days = 1000000000` (a `timedelta` overflow in aggregation) or a
+  schedule interval beyond PostgreSQL's `INTEGER`. Durations, intervals, counts and budgets now
+  have upper bounds, checked when saved through the API or `opsmith apply`
+  ([Configuration](docs/guide/configuration.md#projects-and-settings)).
 - **One unstorable record stopped a connector for good.** A record nested more than 255
   levels deep, or with a service name or environment longer than its column (on PostgreSQL),
   failed the whole window, which was then retried until the job died, and nothing after it

@@ -23,6 +23,7 @@ from opsmith.config import (
     check_credentials_ref,
     resolve_tenant_credential,
 )
+from opsmith.configfile import ConfigError, _validate_connector, _validate_service
 from opsmith.db import utcnow
 from opsmith.etl.features import metric_signal
 from opsmith.executor.agents import AgentBudget, AgentResult, AgentTask
@@ -719,6 +720,48 @@ def test_configuration_input_is_validated(client, seed) -> None:
     for limit in ("0", "-1", "100000"):
         resp = client.get(f"/api/v1/projects/{pid}/tasks?limit={limit}", headers=_h(seed))
         assert resp.status_code == 422, limit
+
+
+def test_values_too_large_to_schedule_are_refused_when_saved(client, platform, seed) -> None:
+    """Without upper bounds these were stored and then failed inside every later job
+    (``timedelta`` overflow) or on PostgreSQL's INTEGER columns."""
+    pid = seed.project.id
+    settings = f"/api/v1/projects/{pid}/settings"
+    for bad in (
+        {"recently_closed_days": 10**9},
+        {"audit_full_every_days": 10**9},
+        {"verification_delay_hours": 1e8},
+        {"inference_interval_hours": 1e9},
+        {"ingest_interval_seconds": 2**31},
+        {"pr_poll_seconds": 10**9},
+        {"budgets": {"max_execution_seconds": 10**9}},
+    ):
+        assert client.patch(settings, json={"settings": bad}, headers=_h(seed)).status_code == 422
+    schedule = client.get(f"/api/v1/projects/{pid}/schedules", headers=_h(seed)).json()[0]
+    resp = client.patch(
+        f"/api/v1/schedules/{schedule['id']}", json={"interval_seconds": 10**12}, headers=_h(seed)
+    )
+    assert resp.status_code == 422
+    resp = client.post(
+        f"/api/v1/projects/{pid}/connectors",
+        json={"name": "c", "type": "file_logs", "interval_seconds": 10**12},
+        headers=_h(seed),
+    )
+    assert resp.status_code == 422
+    for data in ({"interval_seconds": 10**12}, {"inference_interval_hours": 1e9}):
+        with pytest.raises(ConfigError):
+            (_validate_connector if "interval_seconds" in data else _validate_service)(data, "x")
+    # The largest accepted values are usable.
+    biggest = {
+        "recently_closed_days": 3650,
+        "audit_full_every_days": 3650,
+        "verification_delay_hours": 8760,
+        "inference_interval_hours": 8760,
+        "ingest_interval_seconds": 365 * 86400,
+    }
+    assert client.patch(settings, json={"settings": biggest}, headers=_h(seed)).status_code == 200
+    with platform.db.session() as s:
+        platform.aggregator.run(s, seed.project.id)
 
 
 def test_objects_cannot_be_linked_or_triggered_across_projects(client, seed) -> None:
