@@ -54,8 +54,17 @@ def metric_signal(key: str) -> str:
     signal = f"metric:{key}"
     if len(signal) <= MAX_SIGNAL_CHARS:
         return signal
-    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    digest = hashlib.sha256(key.encode(errors="replace")).hexdigest()[:16]
     return f"{signal[: MAX_SIGNAL_CHARS - 17]}#{digest}"
+
+
+# Beyond this a value is a sentinel (an exporter's DBL_MAX), not a measurement, and the
+# statistics overflow on it: two points of 1e308 cannot be summed, and the variance squares.
+MAX_METRIC_VALUE = 1e150
+
+
+def usable_value(value: float) -> bool:
+    return math.isfinite(value) and abs(value) <= MAX_METRIC_VALUE
 
 
 def _r(value: float) -> float | None:
@@ -75,7 +84,7 @@ def compute_features(
     baseline: dict[str, list[float]] = defaultdict(list)
     names: dict[str, str] = {}
     for p in points:
-        if not math.isfinite(p.value):
+        if not usable_value(p.value):
             continue  # one NaN/Inf would turn every statistic of the series into NaN
         key = series_key(p)
         names[key] = p.name

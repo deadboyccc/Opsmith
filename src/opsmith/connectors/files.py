@@ -46,6 +46,9 @@ _BAD_RECORD = (
 )
 
 
+_EPOCH_TEXT = re.compile(r"[+-]?\d{9,}(?:\.\d+)?")  # nine digits: from 1973 as seconds
+
+
 def parse_ts(value: Any) -> datetime:
     """Parse an ISO-8601 string or an epoch number (s, ms, us or ns). Raises ``ValueError``."""
     if isinstance(value, datetime):
@@ -62,10 +65,14 @@ def parse_ts(value: Any) -> datetime:
             raise ValueError(f"timestamp out of range: {value!r}") from exc
     elif isinstance(value, str):
         text = value.strip()
+        if _EPOCH_TEXT.fullmatch(text):
+            # Before ISO: ``fromisoformat`` accepts the basic form ``YYYYMMDDTHHMM``, which a
+            # 13-digit epoch in milliseconds happens to fit about once in two hundred.
+            return parse_ts(float(text))
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
-            return parse_ts(float(text))  # epoch written as a string
+            return parse_ts(float(text))  # epoch written some other way, e.g. 1.7e9
     else:
         raise ValueError(f"not a timestamp: {value!r}")
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)

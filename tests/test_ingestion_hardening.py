@@ -734,3 +734,113 @@ def test_push_to_a_disabled_connector_is_refused(
         with pytest.raises(ConnectorDisabledError, match="disabled"):
             ingestion.ingest_push(s, conn, [record])
         assert not s.scalars(select(RawBatch)).all()
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+# One record that an earlier stage accepts and a later stage cannot process used to stop a
+# connector or a service's bundles for good: nothing set it aside, so every retry and every
+# later job met it again.
+
+
+@pytest.mark.parametrize(
+    ("message", "extra"),
+    [
+        ("half an emoji \ud83d cut by the logger", {}),  # a lone surrogate
+        ("GET /static/app.js:" + "9" * 4400, {}),  # more digits than int() converts
+        ("bad frame \x00\x00 at offset 12", {}),  # NUL: PostgreSQL text cannot hold it
+        ("squared", {"level": "²"}),  # isdigit() is true, int() raises
+        ("long level", {"level": "9" * 5000}),
+    ],
+)
+def test_one_odd_log_record_stops_neither_the_connector_nor_the_bundles(
+    platform: Platform,
+    seed: Seed,
+    ingestion: IngestionService,
+    drain: Any,
+    message: str,
+    extra: dict[str, Any],
+) -> None:
+    start = _start(seed)
+    write_logs(seed.logs, error_records(start, 3))
+    with seed.logs.open("a") as fh:
+        fh.write(json.dumps(_log(start, 1, message, **extra)) + "\n")
+    with platform.db.session() as s:
+        result = ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+        assert result["records"] == 4
+    assert [r.status for r in drain() if r.kind == "build_bundles"] == ["succeeded"]
+    with platform.db.session() as s:
+        bundle = s.scalars(select(AnalysisBundle)).one()
+        assert bundle.stats["events"] == 4
+        stored = json.dumps(
+            [bundle.log_templates, _rows(platform, s.scalars(select(RawBatch)).one())]
+        )
+        assert "\\u0000" not in stored
+        assert "\\ud83d" not in stored
+
+
+@pytest.mark.parametrize("field", ["service", "environment"])
+def test_a_name_that_cannot_be_stored_drops_the_record_not_the_window(
+    platform: Platform, seed: Seed, ingestion: IngestionService, field: str
+) -> None:
+    """PostgreSQL refuses NUL in text. The service lookup failed on it, on every retry."""
+    start = _start(seed)
+    write_logs(seed.logs, error_records(start, 3))
+    with seed.logs.open("a") as fh:
+        fh.write(json.dumps(_log(start, 1, "poison", **{field: "api\x00"})) + "\n")
+    with platform.db.session() as s:
+        result = ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+        assert (result["records"], result["skipped_records"]) == (3, 1)
+        names = s.execute(select(Service.name, Service.environment)).all()
+        assert not [n for pair in names for n in pair if "\x00" in n]
+
+
+def test_huge_metric_values_do_not_stop_the_bundles(
+    platform: Platform, seed: Seed, ingestion: IngestionService, drain: Any
+) -> None:
+    """Two finite points of 1e308 overflow the mean (``fsum``), which failed every build."""
+    start = _start(seed)
+    records = metric_records(start, 6, 100)
+    for record in records[:2]:
+        record["value"] = 1e308
+    write_logs(seed.metrics, records)
+    with platform.db.session() as s:
+        result = ingestion.run_connector(
+            s, seed.metric_connector.id, end=start + timedelta(hours=6)
+        )
+        assert (result["records"], result["skipped_records"]) == (4, 2)
+    assert [r.status for r in drain() if r.kind == "build_bundles"] == ["succeeded"]
+
+
+def test_stored_points_that_overflow_skip_their_series_only() -> None:
+    """Batches stored by an earlier release may hold such points."""
+    from opsmith.etl.features import compute_features  # noqa: PLC0415
+    from opsmith.schemas import MetricPoint  # noqa: PLC0415
+
+    now = utcnow()
+    points = [
+        MetricPoint(timestamp=now, service="s", name=name, value=value)
+        for name, value in (("big", 1e308), ("big", 1e308), ("ok", 1.0), ("ok", 3.0))
+    ]
+    features = compute_features(points, now - timedelta(hours=1))
+    assert [f["name"] for f in features] == ["ok"]
+
+
+@pytest.mark.parametrize(
+    ("lag", "expected"), [(1e300, pipeline.DEFAULT_LAG_SECONDS), (120, 120.0), ("x", 60.0)]
+)
+def test_an_absurd_lag_is_not_used(lag: Any, expected: float) -> None:
+    """``timedelta`` overflows on it, which failed every run of the connector."""
+    assert pipeline._lag_seconds({"lag_seconds": lag}) == expected
+    timedelta(seconds=pipeline._lag_seconds({"lag_seconds": lag}))
+
+
+def test_quoted_epoch_milliseconds_are_not_read_as_a_calendar_date() -> None:
+    """``fromisoformat`` accepts the basic format ``YYYYMMDDTHHMM``, and about one in two
+    hundred 13-digit epoch strings happens to fit it: 1795011232359 was read as the year
+    1795, outside every window, and the record was lost without being counted."""
+    from opsmith.connectors.files import parse_ts  # noqa: PLC0415
+
+    assert parse_ts("1795011232359") == datetime(2026, 11, 18, 14, 13, 52, 359000, tzinfo=UTC)
+    assert parse_ts("1795011232") == datetime(2026, 11, 18, 14, 13, 52, tzinfo=UTC)
+    assert parse_ts("2026-11-18T03:33:52Z") == datetime(2026, 11, 18, 3, 33, 52, tzinfo=UTC)
+    assert parse_ts("20261118T033352Z") == datetime(2026, 11, 18, 3, 33, 52, tzinfo=UTC)

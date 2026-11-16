@@ -31,13 +31,13 @@ from opsmith.config import CredentialRefError, resolve_tenant_credential
 from opsmith.connectors import build_connector
 from opsmith.connectors.base import BaseConnector, supported_keywords
 from opsmith.db import new_id, utcnow
-from opsmith.etl.features import compute_features, series_key
+from opsmith.etl.features import compute_features, series_key, usable_value
 from opsmith.etl.templates import TemplateMiner, extract_locations, fingerprint_of
 from opsmith.localfs import LocalAccessError
 from opsmith.models import AnalysisBundle, Connector, Project, RawBatch, Service
 from opsmith.observability import METRICS
 from opsmith.redaction import Redactor
-from opsmith.schemas import SEVERITY_RANK, LogEvent, MetricPoint, ProjectSettings
+from opsmith.schemas import SEVERITY_RANK, LogEvent, MetricPoint, ProjectSettings, clean_text
 from opsmith.storage import ObjectStore
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ MAX_FIELD_CHARS = 16 * 1024
 # A pull connector reads up to ``now - lag``: sources keep receiving lines stamped slightly
 # in the past, and a window that ended at "now" would never see them.
 DEFAULT_LAG_SECONDS = 60.0
+MAX_LAG_SECONDS = 7 * 86_400.0  # anything longer is a mistake (and overflows a timedelta)
 # Longest window one run reads. A connector that fell behind catches up one window per run.
 MAX_WINDOW = timedelta(hours=24)
 # How far back, and over how many stored batches, a baseline is looked up for metrics that
@@ -102,7 +103,9 @@ class _Contended(Exception):
 
 def normalize_severity(value: str) -> str:
     text = value.strip().strip("[]:").lower()
-    if text.isdigit() and int(text) >= 10:  # pino/bunyan: 10 trace, 20 debug ... 60 fatal
+    # pino/bunyan: 10 trace, 20 debug ... 60 fatal. ASCII digits only and no more than three:
+    # ``isdigit`` is also true for "²", and ``int`` refuses a number of thousands of digits.
+    if text.isascii() and text.isdigit() and len(text) <= 3 and int(text) >= 10:
         level = int(text)
         if level >= 60:
             return "critical"
@@ -111,13 +114,15 @@ def normalize_severity(value: str) -> str:
 
 
 def _cap(value: Any) -> Any:
-    """Truncate over-long strings (recursively) and say so in the text."""
+    """Make strings storable (``clean_text``) and truncate over-long ones, recursively, saying
+    so in the text."""
     if isinstance(value, str):
+        value = clean_text(value)
         if len(value) <= MAX_FIELD_CHARS:
             return value
         return f"{value[:MAX_FIELD_CHARS]}...[truncated {len(value) - MAX_FIELD_CHARS} chars]"
     if isinstance(value, dict):
-        return {k: _cap(v) for k, v in value.items()}
+        return {(clean_text(k) if isinstance(k, str) else k): _cap(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_cap(v) for v in value]
     return value
@@ -133,7 +138,7 @@ def _lag_seconds(config: dict[str, Any]) -> float:
         lag = float(config.get("lag_seconds", DEFAULT_LAG_SECONDS))
     except (TypeError, ValueError):
         return DEFAULT_LAG_SECONDS
-    return lag if math.isfinite(lag) and lag >= 0 else DEFAULT_LAG_SECONDS
+    return lag if 0 <= lag <= MAX_LAG_SECONDS else DEFAULT_LAG_SECONDS  # False for NaN too
 
 
 def _reached(cursor: dict[str, Any], start: datetime, end: datetime) -> datetime:
@@ -163,11 +168,15 @@ _SERVICE_NAME_LEN = _column_length("name")
 _ENVIRONMENT_LEN = _column_length("environment")
 
 
-def _too_long(service: str, environment: str) -> str | None:
-    """A record whose service or environment does not fit the column cannot be stored; on
-    PostgreSQL it would fail the whole window. Truncating could merge two services."""
+def _unstorable(service: str, environment: str) -> str | None:
+    """Why a record's service or environment cannot be stored, if it cannot: it does not fit
+    the column, or it holds a character no text column takes (NUL, a lone surrogate). On
+    PostgreSQL either would fail the whole window, on every retry. Changing the name instead
+    could merge two services, so the record is dropped and counted."""
     if len(service) > _SERVICE_NAME_LEN or len(environment) > _ENVIRONMENT_LEN:
         return "field_too_long"
+    if clean_text(service) != service or clean_text(environment) != environment:
+        return "invalid_name"
     return None
 
 
@@ -359,9 +368,9 @@ class IngestionService:
         """Normalize, bound, redact and store the signals; one ``RawBatch`` per service/kind.
 
         Records that cannot be used are left out and counted in ``dropped`` by reason, so one
-        bad record never stops a connector: non-finite metric values, a service or
-        environment name longer than its column, attributes nested deeper than can be
-        serialized.
+        bad record never stops a connector: metric values that are not finite or are too
+        large to compute with, a service or environment name that does not fit its column or
+        cannot be stored as text, attributes nested deeper than can be serialized.
         """
         settings = ProjectSettings.model_validate(project.settings)
         redactor = Redactor(settings.redaction_extra_patterns)
@@ -369,9 +378,9 @@ class IngestionService:
         grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
         counts: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
         for ev in logs:
-            too_long = _too_long(ev.service, ev.environment)
-            if too_long:
-                dropped[too_long] += 1
+            unstorable = _unstorable(ev.service, ev.environment)
+            if unstorable:
+                dropped[unstorable] += 1
                 continue
             key = (ev.service, ev.environment, "logs")
             c = counts[key]
@@ -391,12 +400,16 @@ class IngestionService:
             if not math.isfinite(mp.value):
                 dropped["non_finite_value"] += 1
                 continue
-            too_long = _too_long(mp.service, mp.environment)
-            if too_long:
-                dropped[too_long] += 1
+            if not usable_value(mp.value):
+                dropped["value_out_of_range"] += 1
+                continue
+            unstorable = _unstorable(mp.service, mp.environment)
+            if unstorable:
+                dropped[unstorable] += 1
                 continue
             key = (mp.service, mp.environment, "metrics")
             record = mp.model_dump(mode="json")
+            record["name"] = clean_text(record["name"])
             labels = _cap(record["labels"])
             # Values only: a label *named* like a credential (kube `secret="db-creds"`) names
             # an object, it does not hold one, so labels get no key-based masking.
@@ -575,6 +588,8 @@ class BundleBuilder:
                 add_points(batch.object_key)
                 continue
             for line_no, rec in enumerate(self.store.iter_jsonl(batch.object_key), start=1):
+                # Batches stored before 1.2.1 were not cleaned when they were written.
+                rec["message"] = clean_text(str(rec.get("message", "")))
                 events.append((rec, f"obj:{batch.object_key}#L{line_no}"))
         if points and not any(p.timestamp < metric_start for p in points):
             # Nothing predates the window (pushed metrics have no look-back), so the

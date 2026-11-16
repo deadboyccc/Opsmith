@@ -31,14 +31,16 @@ _MASKS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|us|ns|kb|mb|gb|%)?\b", re.IGNORECASE), "<num>"),
 )
 _WILDCARD = "<*>"
+# Line numbers are at most seven digits: ``int()`` refuses a number of several thousand
+# digits, and no source file has ten million lines.
 _LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r'File "(?P<path>[^"]+)", line (?P<line>\d+)'),  # Python traceback
-    re.compile(r"\bat [\w.$]+\((?P<path>[\w./-]+\.(?:java|kt|scala)):(?P<line>\d+)\)"),  # JVM
+    re.compile(r'File "(?P<path>[^"]+)", line (?P<line>\d{1,7})'),  # Python traceback
+    re.compile(r"\bat [\w.$]+\((?P<path>[\w./-]+\.(?:java|kt|scala)):(?P<line>\d{1,7})\)"),  # JVM
     # Generic ``dir/file.ext:line``. The look-behind pins a match to the start of a path and
     # the repetitions are bounded, so a long token costs time linear in its length.
     re.compile(
         r"(?<![\w./-])/?(?P<path>(?:[\w.-]{1,255}/){1,64}[\w.-]{1,255}"
-        r"\.(?:py|js|ts|tsx|jsx|go|rb|rs|php|cs)):(?P<line>\d+)"
+        r"\.(?:py|js|ts|tsx|jsx|go|rb|rs|php|cs)):(?P<line>\d{1,7})"
     ),
 )
 
@@ -55,7 +57,8 @@ def tokenize(message: str) -> list[str]:
 
 
 def fingerprint_of(service: str, template: str) -> str:
-    return hashlib.sha1(f"{service}|{template}".encode(), usedforsecurity=False).hexdigest()[:16]
+    raw = f"{service}|{template}".encode(errors="replace")  # stored text may hold a surrogate
+    return hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:16]
 
 
 def _repo_relative(path: str) -> str:

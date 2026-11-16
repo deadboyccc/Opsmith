@@ -31,9 +31,45 @@ CATEGORIES: tuple[str, ...] = (
 # --------------------------------------------------------------------------- signals
 
 
+# Timestamps within a day of what ``datetime`` can hold are refused: converting them to UTC,
+# or adding a second to close a window, overflows.
+_MIN_TIMESTAMP = datetime(1, 1, 3, tzinfo=UTC)
+_MAX_TIMESTAMP = datetime(9999, 12, 29, tzinfo=UTC)
+
+
 def _as_utc(value: datetime) -> datetime:
     """Signals are stored and compared in aware UTC; a naive timestamp is taken to be UTC."""
-    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+    try:
+        aware = (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+    except OverflowError:
+        raise ValueError("timestamp out of range") from None
+    if not _MIN_TIMESTAMP <= aware <= _MAX_TIMESTAMP:
+        raise ValueError("timestamp out of range")
+    return aware
+
+
+def clean_text(value: str) -> str:
+    """Text that every later stage can hold. Two things arrive in logs and model output that
+    cannot be stored or hashed: NUL, which PostgreSQL refuses in text, and a lone surrogate (a
+    logger cut an emoji in half), which cannot be encoded as UTF-8. Both become U+FFFD."""
+    if "\x00" in value:
+        value = value.replace("\x00", "\ufffd")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    return value
+
+
+def clean_value(value: Any) -> Any:
+    """``clean_text`` for every string in a JSON-like value, keys included."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {clean_value(k): clean_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clean_value(v) for v in value]
+    return value
 
 
 # Upper bounds for durations in settings. Without them a huge value is accepted and then

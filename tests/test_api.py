@@ -261,3 +261,33 @@ def test_ui_settings_editor_is_admin_only(client, seed) -> None:
     assert resp.status_code == 303
     page = client.get(f"/ui/config?project_id={seed.project.id}").text
     assert "lead_max_carry&#34;: 4" in page  # rendered (escaped) inside the editor
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["0001-01-01T00:00:00+05:00", "9999-12-31T23:59:59-05:00", "9999-12-31T23:59:59.5Z"],
+)
+def test_a_pushed_timestamp_at_the_edge_of_the_calendar_is_a_422(client, seed, timestamp) -> None:
+    """Converting it to UTC (or adding the second that closes the window) overflowed, which
+    was an unhandled 500: a status log shippers retry forever."""
+    url = f"/api/v1/connectors/{seed.log_connector.id}/push"
+    record = {"timestamp": timestamp, "service": "payments-api", "message": "m"}
+    resp = client.post(url, json=[record], headers=h(seed, "service"))
+    assert resp.status_code == 422
+    assert "out of range" in resp.text
+
+
+@pytest.mark.parametrize("level", ["²", "9" * 5000])
+def test_a_pushed_severity_that_only_looks_numeric_is_accepted(client, seed, level) -> None:
+    url = f"/api/v1/connectors/{seed.log_connector.id}/push"
+    record = {
+        "timestamp": "2026-11-16T00:00:00Z",
+        "service": "payments-api",
+        "message": "m",
+        "severity": level,
+    }
+    resp = client.post(url, json=[record], headers=h(seed, "service"))
+    assert (resp.status_code, resp.json()["records"]) == (202, 1)
