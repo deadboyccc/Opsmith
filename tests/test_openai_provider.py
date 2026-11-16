@@ -548,11 +548,12 @@ def test_coding_agent_stops_when_the_cost_budget_is_spent(tmp_path: Path) -> Non
 
 
 def test_coding_agent_keeps_what_it_spent_when_the_endpoint_fails(tmp_path: Path) -> None:
-    server = Server(
-        _turn(_tool_call(0, "list_files", {"path": "."})),
-        (503, {"error": {"message": "overloaded"}}),
-    )
-    agent = OpenAICodingAgent(client=server.client(), model="m", prices=(1.0, 2.0))
+    overloaded = (503, {"error": {"message": "overloaded"}})
+    # The endpoint stays down through the client's own retries.
+    server = Server(_turn(_tool_call(0, "list_files", {"path": "."})), *[overloaded] * 3)
+    client = server.client()
+    client.sleep = lambda _seconds: None
+    agent = OpenAICodingAgent(client=client, model="m", prices=(1.0, 2.0))
     result = agent.run(
         AgentTask("t", "x", "fix", "", "", [], []),
         Workspace(LocalSandbox(tmp_path), {}),
@@ -614,3 +615,83 @@ def test_live_endpoint_pipeline_stage_through_the_gateway(platform, seed) -> Non
         assert result.cost_usd == 0  # priced at zero, as configured for a local model
         [usage] = s.scalars(select(UsageRecord)).all()
         assert (usage.provider, usage.stage) == ("openai", "task")
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def _provider(server: Server, **client_options: Any) -> OpenAICompatibleProvider:
+    client = server.client()
+    client.sleep = lambda _seconds: None  # no real waiting in tests
+    for name, value in client_options.items():
+        setattr(client, name, value)
+    return OpenAICompatibleProvider(client)
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_a_transient_endpoint_error_is_retried(status: int) -> None:
+    """One 429 or 5xx failed the call at once. For inference that is the whole slot: nothing
+    was analysed until the next one, hours later."""
+    server = Server((status, {"error": {"message": "busy"}}), _completion('{"answer": "ok"}'))
+    assert json.loads(_provider(server).complete(_request()).data) == {"answer": "ok"}
+    assert len(server.requests) == 2
+
+
+def test_retries_are_bounded_and_other_errors_are_not_retried() -> None:
+    busy = (503, {"error": {"message": "busy"}})
+    server = Server(busy, busy, busy, busy)
+    with pytest.raises(LLMError, match="HTTP 503"):
+        _provider(server).complete(_request())
+    assert len(server.requests) == 3  # the call and two retries
+    server = Server((401, {"error": {"message": "bad key"}}), _completion("{}"))
+    with pytest.raises(LLMError, match="HTTP 401"):
+        _provider(server).complete(_request())
+    assert len(server.requests) == 1
+
+
+def test_a_connection_error_is_retried() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(200, json=_completion('{"answer": "ok"}'))
+
+    client = ChatClient(
+        "http://m:8000/v1", http=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    client.sleep = lambda _seconds: None
+    assert json.loads(OpenAICompatibleProvider(client).complete(_request()).data)["answer"] == "ok"
+    assert len(calls) == 2
+
+
+def test_a_reply_without_usage_is_not_free() -> None:
+    """Some servers send no ``usage``. The call was then recorded with zero tokens and zero
+    cost, so the budgets never saw it. It is now estimated from the size of the texts."""
+    reply = _completion('{"answer": "' + "x" * 400 + '"}')
+    del reply["usage"]
+    response = _provider(Server(reply)).complete(_request())
+    assert response.input_tokens > 0
+    assert response.output_tokens >= 100
+    reply = _completion(
+        '{"answer": "ok"}', usage={"prompt_tokens": "12.0", "completion_tokens": None}
+    )
+    response = _provider(Server(reply)).complete(_request())
+    assert (response.input_tokens, response.output_tokens) == (12, 0)
+
+
+def test_content_given_as_parts_is_read_as_text() -> None:
+    """Content may be a list of typed parts. It was turned into the text of a Python list,
+    which failed validation twice."""
+    parts = [{"type": "text", "text": '{"answer": '}, {"type": "text", "text": '"ok"}'}]
+    reply = _completion(None, message={"content": parts})
+    assert json.loads(_provider(Server(reply)).complete(_request()).data) == {"answer": "ok"}
+
+
+@pytest.mark.parametrize("choices", [[None], ["text"], [{"message": "text"}]])
+def test_a_malformed_choice_is_an_llm_error(choices: list[Any]) -> None:
+    reply = _completion("{}")
+    reply["choices"] = choices
+    with pytest.raises(LLMError, match="no usable choice"):
+        _provider(Server(reply)).complete(_request())

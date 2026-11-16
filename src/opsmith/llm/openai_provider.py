@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -41,6 +43,15 @@ JSON_MODES = ("json_schema", "json_object")
 _TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n?```\s*$", re.DOTALL)
 _THINK = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+
+
+# Transient answers worth asking again for, and how: two more tries, 1 s then 2 s (or what the
+# endpoint's Retry-After says), never more than half a minute each.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_RETRIES = 2
+RETRY_BASE_SECONDS = 1.0
+RETRY_MAX_SECONDS = 30.0
+CHARS_PER_TOKEN = 4  # the usual rough ratio, used only when an endpoint reports no usage
 
 
 class EndpointError(LLMError):
@@ -68,13 +79,14 @@ class ChatClient:
         self._api_key_ref = api_key_ref
         self._http = http
         self._limit_param = "max_tokens"
+        self.sleep: Callable[[float], None] = time.sleep  # replaced in tests
 
     def _headers(self) -> dict[str, str]:
         # Resolved per call, so a rotated key is picked up; local servers need none.
         key = resolve_credential(self._api_key_ref) if self._api_key_ref else None
         return {"Authorization": f"Bearer {key}"} if key else {}
 
-    def _post(self, payload: dict[str, Any]) -> httpx.Response:
+    def _post_once(self, payload: dict[str, Any]) -> httpx.Response:
         url = f"{self.base_url}/chat/completions"
         try:
             if self._http is not None:
@@ -83,6 +95,25 @@ class ChatClient:
                 return client.post(url, json=payload, headers=self._headers())
         except httpx.HTTPError as exc:
             raise LLMError(f"model endpoint unreachable: {type(exc).__name__}") from exc
+
+    def _post(self, payload: dict[str, Any]) -> httpx.Response:
+        """One request, repeated a bounded number of times while the endpoint is busy or
+        cannot be reached. Without this a single 429 fails the stage; for inference that is
+        the whole slot. A timeout while reading is not repeated: the request may be running."""
+        for attempt in range(MAX_RETRIES + 1):
+            last = attempt == MAX_RETRIES
+            try:
+                response = self._post_once(payload)
+            except LLMError as exc:
+                if last or not isinstance(exc.__cause__, httpx.ConnectError | httpx.ConnectTimeout):
+                    raise
+                delay = RETRY_BASE_SECONDS * 2**attempt
+            else:
+                if last or response.status_code not in RETRY_STATUSES:
+                    return response
+                delay = _retry_after(response) or RETRY_BASE_SECONDS * 2**attempt
+            self.sleep(min(delay, RETRY_MAX_SECONDS))
+        raise AssertionError("unreachable")  # pragma: no cover - the loop always returns
 
     def chat(self, payload: dict[str, Any], *, max_tokens: int) -> dict[str, Any]:
         """Send one request and return the decoded response body."""
@@ -102,6 +133,18 @@ class ChatClient:
             raise LLMError("model endpoint returned a body that is not JSON") from exc
         if not isinstance(body, dict) or not body.get("choices"):
             raise LLMError("model endpoint returned no choices")
+        choice = body["choices"][0] if isinstance(body["choices"], list) else None
+        if not isinstance(choice, dict) or not isinstance(choice.get("message") or {}, dict):
+            raise LLMError("model endpoint returned no usable choice")
+        if not isinstance(body.get("usage"), dict):
+            # No usage reported. Zero tokens would make the call free for the budgets, so
+            # it is estimated from the size of what was sent and what came back.
+            sent = sum(len(str(m.get("content") or "")) for m in payload.get("messages", []))
+            received = len(text_of(choice.get("message") or {}))
+            body["usage"] = {
+                "prompt_tokens": sent // CHARS_PER_TOKEN + 1,
+                "completion_tokens": received // CHARS_PER_TOKEN + 1,
+            }
         return body
 
 
@@ -115,9 +158,38 @@ def _error_text(response: httpx.Response) -> str:
     return str(error)[:300]
 
 
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds the endpoint asks to wait, when it says so as a plain number."""
+    try:
+        seconds = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _count(value: Any) -> int:
+    """A token count as an endpoint may write it: 12, 12.0, "12", or nothing."""
+    try:
+        return max(int(float(value)), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def usage_of(body: dict[str, Any]) -> tuple[int, int]:
-    usage = body.get("usage") or {}
-    return int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+    return _count(usage.get("prompt_tokens")), _count(usage.get("completion_tokens"))
+
+
+def text_of(message: dict[str, Any]) -> str:
+    """The text of a message whose content is a string or a list of typed parts."""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "") if isinstance(part, dict) else str(part) for part in content
+        )
+    return str(content or "")
 
 
 def strip_fence(text: str) -> str:
@@ -194,5 +266,5 @@ class OpenAICompatibleProvider:
         if error is not None:
             error.usage = billed  # the call was still billed; the gateway records it
             raise error
-        billed.data = strip_fence(str(message.get("content") or ""))
+        billed.data = strip_fence(text_of(message))
         return billed
