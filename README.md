@@ -60,6 +60,11 @@ OPSMITH_DATA_DIR=./opsmith-demo/data uv run opsmith api
 # open http://127.0.0.1:8000/ui and sign in with the admin key the demo printed
 ```
 
+This is what the demo's task looks like once it has gone all the way, with its trail back to
+the raw evidence (all data is synthetic; more pages in the [UI tour](docs/guide/ui-tour.md)):
+
+![A verified task with its provenance chain](docs/images/ui-task-verified.png)
+
 ## How it works
 
 One loop: **observe → analyze → propose → human approves → execute → pull request → verify.**
