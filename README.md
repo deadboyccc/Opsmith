@@ -17,7 +17,7 @@ vLLM.
 > **Two rules are never broken.** Nothing changes code without a recorded human approval, and
 > Opsmith cannot merge. A human always merges.
 
-**Status: pre-1.0.** The whole loop runs and is covered by tests, including adversarial ones
+**Status: 1.0.** The whole loop runs and is covered by tests, including adversarial ones
 and real-container sandbox tests. It has not been proven in production. See
 [what has been tested](#what-has-been-tested) before you point it at something valuable.
 

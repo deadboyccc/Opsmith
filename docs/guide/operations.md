@@ -69,8 +69,8 @@ to.
 Opsmith creates its tables at start and has **no schema migrations yet**
 ([ADR-002](../../ARCHITECTURE_DECISIONS.md)). A release that changes the schema says so under
 *Upgrade notes* in the [changelog](../../CHANGELOG.md); until migrations exist, such an upgrade
-needs a fresh database. Treat current versions as pre-1.0: fine for evaluation and pilots, not
-yet for data you cannot recreate.
+needs a fresh database, so back up first (see [Backups](#backups)) and do not rely on keeping
+the review history and audit trail across such an upgrade.
 
 To upgrade a Compose installation without a schema change:
 

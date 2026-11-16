@@ -1,12 +1,12 @@
 # Changelog
 
 Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepachangelog.com/);
-versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached. Until then,
-anything may change between releases.
+versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
+the database schema says so under *Upgrade notes*.
 
-## Unreleased
+## 1.0.0 - 2026-11-16
 
-A hardening release that follows the
+The first stable release. A hardening release that follows the
 [independent project review](docs/development/independent-project-review.md). It adds no product features.
 [The review response](docs/development/review-response.md) maps the review's items to this work.
 
