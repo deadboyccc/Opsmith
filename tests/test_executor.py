@@ -12,6 +12,7 @@ from opsmith.executor.agents import (
     AgentResult,
     AgentTask,
     ClaudeCodingAgent,
+    HeuristicAgent,
     _fix_bare_except,
     _fix_http_timeout,
     _fix_secret,
@@ -351,3 +352,43 @@ def test_claude_agent_stops_when_the_cost_budget_is_spent(tmp_path: Path, monkey
     )
     assert res.summary == "Cost budget exhausted."
     assert len(client.calls) == 2
+
+
+# ---------------------------------------------------------------- regressions (1.2.1)
+
+
+def test_edits_keep_a_files_line_endings(tmp_path: Path) -> None:
+    """An edit used to rewrite every CRLF in the file as LF, so a one-line fix produced a
+    whole-file diff (and the credential scan then treated every old line as newly added)."""
+    crlf = tmp_path / "win.py"
+    crlf.write_bytes(b"import yaml\r\nx = yaml.load(f)\r\ny = 2\r\n")
+    (tmp_path / "unix.py").write_bytes(b"a = 1\nb = 2\n")
+    ws = Workspace(LocalSandbox(tmp_path), {})
+    ws.replace_in_file("win.py", "y = 2", "y = 3")
+    assert crlf.read_bytes() == b"import yaml\r\nx = yaml.load(f)\r\ny = 3\r\n"
+    # A match that spans lines is written by the model with "\n".
+    ws.replace_in_file("win.py", "x = yaml.load(f)\ny = 3", "x = 1\ny = 4")
+    assert crlf.read_bytes() == b"import yaml\r\nx = 1\r\ny = 4\r\n"
+    # A full rewrite (what the codemods do) keeps the convention of the file it replaces.
+    ws.write_file("win.py", ws.read_file("win.py").replace("y = 4", "y = 5"))
+    assert crlf.read_bytes() == b"import yaml\r\nx = 1\r\ny = 5\r\n"
+    # Files that use LF, and new files, are written exactly as given.
+    ws.replace_in_file("unix.py", "b = 2", "b = 3")
+    assert (tmp_path / "unix.py").read_bytes() == b"a = 1\nb = 3\n"
+    ws.write_file("new.txt", "one\ntwo\n")
+    assert (tmp_path / "new.txt").read_bytes() == b"one\ntwo\n"
+    ws.write_file("explicit.txt", "one\r\ntwo\n")
+    assert (tmp_path / "explicit.txt").read_bytes() == b"one\r\ntwo\n"
+
+
+def test_codemod_on_a_crlf_file_changes_one_line(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_bytes(b"import yaml\r\n\r\ncfg = yaml.load(fh)\r\nz = 1\r\n")
+    ws = Workspace(LocalSandbox(tmp_path), {})
+    finding = {"rule_id": "py.yaml-load", "path": "app.py", "line": 3}
+    res = HeuristicAgent().run(
+        AgentTask("t", "x", "security", "p", "a", ["c"], ["app.py"], [finding]), ws, AgentBudget()
+    )
+    assert res.success
+    assert (tmp_path / "app.py").read_bytes() == (
+        b"import yaml\r\n\r\ncfg = yaml.safe_load(fh)\r\nz = 1\r\n"
+    )

@@ -212,6 +212,18 @@ def docker_daemon_error() -> str | None:
     return None
 
 
+def _read_verbatim(path: Path) -> str:
+    """File text without newline translation (``read_text`` would turn CRLF into LF)."""
+    with path.open(encoding="utf-8", errors="replace", newline="") as fh:
+        return fh.read()
+
+
+def _uses_crlf(text: str) -> bool:
+    """Whether most of the text's line endings are CRLF."""
+    crlf = text.count("\r\n")
+    return crlf > 0 and 2 * crlf >= text.count("\n")
+
+
 class WorkspaceError(ValueError):
     pass
 
@@ -251,28 +263,55 @@ class Workspace:
                 break
         return out
 
-    def read_file(self, rel: str, max_chars: int = 60_000) -> str:
+    def _existing_file(self, rel: str) -> Path:
         path = self.resolve(rel)
         if not path.is_file():
             raise WorkspaceError(f"no such file: {rel}")
         if path.stat().st_size > MAX_READ_BYTES:
             raise WorkspaceError(f"file too large to read: {rel}")
-        text = path.read_text(encoding="utf-8", errors="replace")
+        return path
+
+    def read_file(self, rel: str, max_chars: int = 60_000) -> str:
+        """The file's text with LF line endings, whatever the file itself uses."""
+        text = self._existing_file(rel).read_text(encoding="utf-8", errors="replace")
         return text if len(text) <= max_chars else text[:max_chars] + "\n...[truncated]"
 
     def write_file(self, rel: str, content: str) -> None:
+        """Create or replace a file. Content written with LF line endings keeps those of the
+        file it replaces: rewriting a CRLF file as LF would turn a one-line fix into a diff of
+        every line."""
+        path = self.resolve(rel)
+        replaces_text = path.is_file() and path.stat().st_size <= MAX_READ_BYTES
+        if "\r" not in content and replaces_text and _uses_crlf(_read_verbatim(path)):
+            content = content.replace("\n", "\r\n")
+        self._write_verbatim(path, content)
+
+    def _write_verbatim(self, path: Path, content: str) -> None:
         if len(content.encode()) > MAX_WRITE_BYTES:
             raise WorkspaceError("file too large")
-        path = self.resolve(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        with path.open("w", encoding="utf-8", newline="") as fh:  # no newline translation
+            fh.write(content)
 
     def replace_in_file(self, rel: str, old: str, new: str) -> None:
-        text = self.read_file(rel, max_chars=10_000_000)
-        count = text.count(old)
+        """Replace exactly one occurrence, leaving every other byte of the file as it was.
+        ``old`` and ``new`` may be written with LF for a file that uses CRLF."""
+        path = self._existing_file(rel)
+        text = _read_verbatim(path)
+        candidates = [old]
+        if "\n" in old and "\r" not in old:
+            candidates.append(old.replace("\n", "\r\n"))
+        match, count = old, 0
+        for candidate in candidates:
+            count = text.count(candidate)
+            if count:
+                match = candidate
+                break
         if count != 1:
             raise WorkspaceError(f"expected exactly one match in {rel}, found {count}")
-        self.write_file(rel, text.replace(old, new, 1))
+        if "\r" not in new and _uses_crlf(text):
+            new = new.replace("\n", "\r\n")
+        self._write_verbatim(path, text.replace(match, new, 1))
 
     def run_check(self, name: str) -> CommandResult:
         if name not in self.checks:
