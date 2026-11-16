@@ -4,6 +4,15 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## Unreleased
+
+### Fixed
+
+- **The Prometheus connector could read past the end of its window.** It rounded the window's
+  times to the millisecond, so an end such as `…36.1766` became `…36.177` and Prometheus
+  returned a point that also belonged to the next window. Times are now truncated. Found by
+  running the connector against real Prometheus servers.
+
 ## 1.1.0 - 2026-11-16
 
 ### Upgrade notes

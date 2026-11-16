@@ -10,6 +10,12 @@ from opsmith.connectors.base import ConnectorError, FetchResult, MetricConnector
 from opsmith.schemas import MetricPoint
 
 
+def _rfc3339(moment: datetime) -> str:
+    """Millisecond precision, truncated: rounding could move the end of the window past
+    ``end`` and return a point that belongs to the next window."""
+    return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 @register("prometheus")
 class PrometheusConnector(MetricConnector):
     """config: ``url``, ``queries``: ``[{name, promql}]``, ``step`` (default ``60s``),
@@ -36,8 +42,8 @@ class PrometheusConnector(MetricConnector):
                 url,
                 {
                     "query": query["promql"],
-                    "start": f"{(start - lookback).timestamp():.3f}",
-                    "end": f"{end.timestamp():.3f}",
+                    "start": _rfc3339(start - lookback),
+                    "end": _rfc3339(end),
                     "step": str(self.config.get("step", "60s")),
                 },
             )

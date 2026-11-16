@@ -148,6 +148,32 @@ def test_prometheus_connector() -> None:
     assert res.metrics[0].name == "latency_p95"
 
 
+def test_prometheus_window_is_never_rounded_past_its_end() -> None:
+    """Prometheus takes millisecond times. Rounding 59.9996 s up to 60.000 s asked for a step
+    after the window, which then appeared in the next window as well."""
+    sent: list[httpx.QueryParams] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.params)
+        return httpx.Response(200, json={"status": "success", "data": {"result": []}})
+
+    conn = build_connector(
+        "prometheus",
+        {
+            "url": "http://prom:9090",
+            "queries": [{"name": "q", "promql": "up"}],
+            "baseline_seconds": 0.0004,
+        },
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=fake_dns,
+    )
+    end = END + timedelta(microseconds=999_600)
+    conn.fetch(START, end, {})
+    assert sent[0]["end"] == "2026-03-01T01:00:00.999Z"
+    assert sent[0]["start"] == "2026-02-28T23:59:59.999Z"  # 23:59:59.9996, truncated down
+    assert datetime.fromisoformat(sent[0]["end"]) <= end
+
+
 # --------------------------------------------------------------------------- file confinement
 
 
