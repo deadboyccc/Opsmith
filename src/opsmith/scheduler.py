@@ -195,7 +195,7 @@ def ensure_project_schedules(session: Session, project: Project) -> list[Schedul
                 project_id=p,
                 job_kind="ingest",
                 target_id=conn.id,
-                interval_seconds=conn.interval_seconds or settings.ingest_interval_seconds,
+                interval_seconds=conn.interval_seconds,
                 payload={"connector_id": conn.id},
             )
         )

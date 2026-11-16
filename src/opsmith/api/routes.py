@@ -109,7 +109,8 @@ class ConnectorIn(_Strict):
     config: dict[str, Any] = Field(default_factory=dict)
     credentials_ref: _CredentialsRef
     service_id: str | None = None
-    interval_seconds: int = Field(900, ge=60, le=YEAR_SECONDS)
+    # Left out: the project's ``ingest_interval_seconds``.
+    interval_seconds: int | None = Field(None, ge=60, le=YEAR_SECONDS)
     enabled: bool = True
 
 
@@ -309,8 +310,12 @@ def create_connector(
             raise HTTPException(422, "service belongs to a different project")
     _check_ref(body.credentials_ref)
     _conflict_if_exists(session, Connector, "connector", project_id=project.id, name=body.name)
+    fields = body.model_dump()
+    if fields["interval_seconds"] is None:
+        settings = ProjectSettings.model_validate(project.settings)
+        fields["interval_seconds"] = settings.ingest_interval_seconds
     conn = Connector(
-        tenant_id=user.tenant_id, project_id=project.id, kind=types[body.type], **body.model_dump()
+        tenant_id=user.tenant_id, project_id=project.id, kind=types[body.type], **fields
     )
     session.add(conn)
     session.flush()

@@ -195,3 +195,20 @@ def test_an_unknown_log_level_is_a_configuration_error(env: Path, monkeypatch) -
         main(["scheduler", "--once"])
     monkeypatch.setenv("OPSMITH_LOG_LEVEL", "debug")
     assert main(["scheduler", "--once"]) == 0
+
+
+def test_apply_gives_a_connector_without_an_interval_the_projects(
+    env: Path, tmp_path: Path
+) -> None:
+    main(["init", "--tenant", "acme"])
+    cfg = tmp_path / "interval.toml"
+    cfg.write_text(
+        '[[projects]]\nname = "p"\n[projects.settings]\ningest_interval_seconds = 300\n'
+        '[[projects.connectors]]\nname = "default"\ntype = "push_logs"\n'
+        '[[projects.connectors]]\nname = "own"\ntype = "push_logs"\ninterval_seconds = 120\n'
+    )
+    assert main(["apply", str(cfg), "--tenant", "acme"]) == 0
+    platform = Platform(Settings(data_dir=env, log_json=False))
+    with platform.db.session() as s:
+        intervals = {c.name: c.interval_seconds for c in s.scalars(select(Connector))}
+    assert intervals == {"default": 300, "own": 120}

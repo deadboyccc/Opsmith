@@ -103,7 +103,7 @@ def _validate_repository(data: dict[str, Any], what: str) -> None:
 
 
 def _validate_connector(data: dict[str, Any], what: str) -> None:
-    interval = data.get("interval_seconds", 900)
+    interval = data.get("interval_seconds", 900)  # left out: the project's default
     if (
         not isinstance(interval, int)
         or isinstance(interval, bool)
@@ -218,6 +218,8 @@ def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list
                 session.add(conn)
             for key, value in _pick(cdata, _CONNECTOR_FIELDS, what).items():
                 setattr(conn, key, value)
+            if "interval_seconds" not in cdata:
+                conn.interval_seconds = settings.ingest_interval_seconds
             conn.kind = types[conn.type]
             if "service" in cdata:
                 # A service is its name and its environment; the same name may exist in several.

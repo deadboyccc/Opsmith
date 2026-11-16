@@ -358,3 +358,20 @@ def test_the_api_reference_page_is_allowed_to_load_its_assets(client) -> None:
         policy = client.get(path).headers["content-security-policy"]
         assert "cdn.jsdelivr.net" not in policy
         assert "unsafe-inline" not in policy
+
+
+def test_a_connector_without_an_interval_takes_the_projects(client, seed) -> None:
+    """``ingest_interval_seconds`` is documented as the default connector interval, but every
+    connector was created with 900 seconds of its own, so the setting was never used."""
+    settings_url = f"/api/v1/projects/{seed.project.id}/settings"
+    patch = {"settings": {"ingest_interval_seconds": 300}}
+    assert client.patch(settings_url, json=patch, headers=h(seed)).status_code == 200
+    url = f"/api/v1/projects/{seed.project.id}/connectors"
+    body = {"name": "pushed", "type": "push_logs"}
+    assert client.post(url, json=body, headers=h(seed)).json()["interval_seconds"] == 300
+    body = {"name": "own", "type": "push_logs", "interval_seconds": 120}
+    assert client.post(url, json=body, headers=h(seed)).json()["interval_seconds"] == 120
+    schedules = client.get(f"/api/v1/projects/{seed.project.id}/schedules", headers=h(seed))
+    by_target = {s["target_id"]: s["interval_seconds"] for s in schedules.json()}
+    connectors = {c["name"]: c["id"] for c in client.get(url, headers=h(seed)).json()}
+    assert (by_target[connectors["pushed"]], by_target[connectors["own"]]) == (300, 120)
