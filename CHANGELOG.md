@@ -49,6 +49,12 @@ the database schema says so under *Upgrade notes*.
 - **Post-merge verification gave up silently** after four hours without data, which with the
   default daily audit left most code-only tasks `merged` for good. It now waits up to 48
   hours and then fails the job (dead, audited, notified) instead of succeeding quietly.
+- **With the real Claude SDK, refusals, truncated replies and out-of-bound values bypassed the
+  budgets.** `messages.parse` validates the reply inside the SDK and raised a pydantic error
+  before the provider could read the stop reason, so the billed usage was never recorded, the
+  gateway's corrective retry never ran, and the whole job was retried (and billed) again. The
+  provider now sends the same schema through `messages.create` and the gateway validates the
+  reply. The tests run the real SDK over a mock transport instead of a hand-written fake.
 - **Settings too large to use were accepted** and then failed inside every later job, for
   example `recently_closed_days = 1000000000` (a `timedelta` overflow in aggregation) or a
   schedule interval beyond PostgreSQL's `INTEGER`. Durations, intervals, counts and budgets now

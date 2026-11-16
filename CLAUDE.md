@@ -16,7 +16,9 @@
 - If Docker is available, also run `uv run pytest -m docker`: those tests exercise the real
   sandbox and are skipped silently otherwise, so a green run without Docker proves less.
 - When editing Claude API code (`llm/anthropic_provider.py`, `executor/agents.py`), keep the
-  existing patterns: `messages.parse(output_format=...)` for structured stages, a manual
+  existing patterns: `messages.create` with `output_config.format` set by
+  `anthropic_provider.output_format(schema)` for structured stages (not `messages.parse`, which
+  raises inside the SDK before the stop reason and usage can be read), a manual
   tool loop with strict tool schemas, `output_config.effort`, refusal and `max_tokens` stop
   reasons handled, and full `response.content` appended back to the conversation.
 - Do not commit local artifacts (`data/`, `opsmith-demo/`, `*.db`, `.scratch/`).

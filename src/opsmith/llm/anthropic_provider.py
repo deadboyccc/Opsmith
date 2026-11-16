@@ -1,7 +1,11 @@
 """Claude provider using the official ``anthropic`` SDK (optional extra: ``opsmith[anthropic]``).
 
-Structured stages use ``client.messages.parse(output_format=<pydantic model>)`` so the API
-constrains the response to the stage schema; the gateway validates it again regardless.
+Structured stages send the stage schema as ``output_config.format`` (the same request body
+``client.messages.parse(output_format=...)`` builds), so the API constrains the response to it.
+They call ``messages.create``, not ``messages.parse``: ``parse`` validates the reply inside the
+SDK and raises before the stop reason or the billed usage can be read, so a refusal, a
+truncation or a value outside a schema bound would skip the usage ledger and the gateway's
+corrective retry. The gateway validates the text instead.
 Server-side refusal fallbacks are enabled by default (``OPSMITH_ANTHROPIC_FALLBACKS``).
 """
 
@@ -10,17 +14,29 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from pydantic import BaseModel
+
 from opsmith.config import resolve_credential
 from opsmith.llm.base import LLMError, LLMOutputError, LLMRefusal, ProviderRequest, ProviderResponse
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
-def make_client(api_key_ref: str | None = None) -> Any:
+def _sdk() -> Any:
     try:
         import anthropic  # noqa: PLC0415 - optional dependency
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
         raise LLMError("install the 'anthropic' extra: pip install 'opsmith[anthropic]'") from exc
+    return anthropic
+
+
+def output_format(schema: type[BaseModel]) -> dict[str, Any]:
+    """The ``output_config.format`` that ``messages.parse(output_format=schema)`` would send."""
+    return {"type": "json_schema", "schema": _sdk().transform_schema(schema.model_json_schema())}
+
+
+def make_client(api_key_ref: str | None = None) -> Any:
+    anthropic = _sdk()
     key = resolve_credential(api_key_ref) if api_key_ref else None
     # With no explicit key the SDK resolves ANTHROPIC_API_KEY / auth token / ant profile.
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
@@ -47,13 +63,12 @@ class AnthropicProvider:
         return self._client
 
     def complete(self, request: ProviderRequest) -> ProviderResponse:
-        response = self.client.messages.parse(
+        response = self.client.messages.create(
             model=request.model,
             max_tokens=request.max_tokens,
             system=request.system,
             messages=[{"role": "user", "content": request.user}],
-            output_format=request.schema,
-            output_config={"effort": request.effort},
+            output_config={"effort": request.effort, "format": output_format(request.schema)},
             **fallback_kwargs(),
         )
         usage = getattr(response, "usage", None)
@@ -75,9 +90,6 @@ class AnthropicProvider:
                 error = LLMOutputError(f"stage {request.stage}: output truncated at max_tokens")
             error.usage = billed
             raise error
-        parsed = getattr(response, "parsed_output", None)
-        if parsed is not None:
-            billed.data = parsed.model_dump(mode="json")
-        else:
-            billed.data = next((b.text for b in response.content if b.type == "text"), "")
+        # Validated by the gateway, which asks once more when the text does not fit the schema.
+        billed.data = next((b.text for b in response.content if b.type == "text"), "")
         return billed

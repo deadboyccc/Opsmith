@@ -1,9 +1,10 @@
 import json
-from types import SimpleNamespace
 from typing import Any
 
+import anthropic
+import httpx2
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from opsmith.llm import (
     AnthropicProvider,
@@ -15,7 +16,7 @@ from opsmith.llm import (
     ProviderRequest,
     ProviderResponse,
 )
-from opsmith.llm.anthropic_provider import FALLBACK_BETA, fallback_kwargs
+from opsmith.llm.anthropic_provider import FALLBACK_BETA, fallback_kwargs, output_format
 from opsmith.llm.pricing import PRICES, cost_usd
 from opsmith.llm.prompts import get_prompt
 from opsmith.models import Project, UsageRecord
@@ -237,19 +238,40 @@ def test_unlisted_response_model_is_priced_as_the_configured_model(platform, see
     assert len(provider.requests) == 1
 
 
-class FakeMessages:
-    def __init__(self, response: Any) -> None:
-        self.response = response
-        self.kwargs: dict[str, Any] = {}
+def _anthropic(*replies: dict[str, Any]) -> tuple[AnthropicProvider, list[httpx2.Request]]:
+    """The real ``anthropic`` SDK over a mock transport: the SDK's own request building and
+    response parsing run, and nothing leaves the process. Each reply overrides fields of a
+    successful message; the last one repeats."""
+    sent: list[httpx2.Request] = []
 
-    def parse(self, **kwargs: Any) -> Any:
-        self.kwargs = kwargs
-        return self.response
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        reply = replies[min(len(sent), len(replies)) - 1]
+        return httpx2.Response(
+            200,
+            json={
+                "id": f"msg_{len(sent)}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": '{"answer": "hi"}'}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+                **reply,
+            },
+        )
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        http_client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+        max_retries=0,
+    )
+    return AnthropicProvider(client=client), sent
 
 
-def _anthropic(response: Any) -> tuple[AnthropicProvider, FakeMessages]:
-    messages = FakeMessages(response)
-    return AnthropicProvider(client=SimpleNamespace(messages=messages)), messages
+def _text(value: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": value}]
 
 
 def _req() -> ProviderRequest:
@@ -266,52 +288,48 @@ def _req() -> ProviderRequest:
 
 def test_anthropic_provider_structured_call(monkeypatch) -> None:
     monkeypatch.delenv("OPSMITH_ANTHROPIC_FALLBACKS", raising=False)
-    usage = SimpleNamespace(input_tokens=100, output_tokens=20, cache_read_input_tokens=0)
-    provider, messages = _anthropic(
-        SimpleNamespace(
-            stop_reason="end_turn",
-            usage=usage,
-            parsed_output=Out(answer="hi"),
-            content=[],
-            model="claude-opus-5-5",
-        )
-    )
+    provider, sent = _anthropic({})
     res = provider.complete(_req())
-    assert res.data == {"answer": "hi"}
-    assert res.input_tokens == 100
-    assert messages.kwargs["output_format"] is Out
-    assert messages.kwargs["output_config"] == {"effort": "medium"}
-    assert messages.kwargs["model"] == "claude-opus-5-5"
-    assert messages.kwargs["extra_headers"] == {"anthropic-beta": FALLBACK_BETA}
-    assert messages.kwargs["extra_body"] == {"fallbacks": "default"}
+    assert Out.model_validate_json(res.data) == Out(answer="hi")
+    assert (res.input_tokens, res.output_tokens, res.model) == (100, 20, "claude-opus-5-5")
+    body = json.loads(sent[0].content)
+    assert body["model"] == "claude-opus-5-5"
+    # The schema the API constrains the reply to: what messages.parse(output_format=Out) sends.
+    assert body["output_config"] == {"effort": "medium", "format": output_format(Out)}
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert "answer" in body["output_config"]["format"]["schema"]["properties"]
+    assert FALLBACK_BETA in sent[0].headers["anthropic-beta"]
+    assert body["fallbacks"] == "default"
 
 
 def test_anthropic_provider_refusal_and_truncation(monkeypatch) -> None:
-    usage = SimpleNamespace(input_tokens=1, output_tokens=1)
-    provider, _ = _anthropic(
-        SimpleNamespace(
-            stop_reason="refusal", usage=usage, stop_details=SimpleNamespace(category="cyber")
-        )
-    )
-    with pytest.raises(LLMRefusal):
+    refusal = {
+        "stop_reason": "refusal",
+        "content": [],
+        "stop_details": {"type": "refusal", "category": "cyber", "explanation": "no"},
+    }
+    provider, _ = _anthropic(refusal)
+    with pytest.raises(LLMRefusal, match="cyber"):
         provider.complete(_req())
-    provider, _ = _anthropic(SimpleNamespace(stop_reason="max_tokens", usage=usage))
-    with pytest.raises(LLMOutputError):
+    provider, _ = _anthropic({"stop_reason": "max_tokens", "content": _text('{"answer": "tr')})
+    with pytest.raises(LLMOutputError, match="max_tokens"):
         provider.complete(_req())
     monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
     assert fallback_kwargs() == {}
 
 
 @pytest.mark.parametrize(
-    ("stop_reason", "error"), [("max_tokens", LLMOutputError), ("refusal", LLMRefusal)]
+    ("reply", "error"),
+    [
+        ({"stop_reason": "max_tokens", "content": _text('{"answer": "trunc')}, LLMOutputError),
+        ({"stop_reason": "refusal", "content": []}, LLMRefusal),
+    ],
 )
-def test_billed_failures_are_recorded_before_they_surface(
-    platform, seed, stop_reason, error
-) -> None:
-    usage = SimpleNamespace(input_tokens=60_000, output_tokens=16_000, cache_read_input_tokens=0)
-    provider, _ = _anthropic(
-        SimpleNamespace(stop_reason=stop_reason, usage=usage, content=[], model="claude-opus-5-5")
-    )
+def test_billed_failures_are_recorded_before_they_surface(platform, seed, reply, error) -> None:
+    """With the real SDK: ``messages.parse`` used to raise a pydantic error from inside the SDK
+    for these replies, so nothing was recorded and the budgets never saw the spend."""
+    usage = {"input_tokens": 60_000, "output_tokens": 16_000}
+    provider, _ = _anthropic({**reply, "usage": usage})
     with pytest.raises(error) as raised:
         provider.complete(_req())
     assert raised.value.usage.input_tokens == 60_000
@@ -334,6 +352,29 @@ def test_billed_failures_are_recorded_before_they_surface(
         assert (record.input_tokens, record.output_tokens) == (60_000, 16_000)
         assert record.cost_usd == pytest.approx(cost_usd("claude-opus-5-5", 60_000, 16_000))
         assert record.run_id == "r1"
+
+
+class Bounded(BaseModel):
+    answer: str = Field(max_length=5)
+
+
+def test_a_reply_outside_a_schema_bound_gets_the_corrective_retry(platform, seed) -> None:
+    """Constrained decoding does not enforce every bound (here ``maxLength``). The gateway
+    must see the reply, record its cost and ask once more, instead of the SDK raising."""
+    provider, sent = _anthropic(
+        {"content": _text('{"answer": "far too long"}')}, {"content": _text('{"answer": "ok"}')}
+    )
+    _project(platform, seed)
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        result = _gateway(provider).structured(
+            s, project=project, stage="x", prompt_id="audit.triage", variables={}, schema=Bounded
+        )
+        assert result.output == Bounded(answer="ok")
+        assert s.query(UsageRecord).count() == 2  # both calls were billed and recorded
+    assert len(sent) == 2
+    first, retry = (json.loads(r.content)["messages"][0]["content"] for r in sent)
+    assert retry != first  # the retry carries the validation error back to the model
 
 
 def test_pricing() -> None:
