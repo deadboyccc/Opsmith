@@ -177,7 +177,10 @@ class Aggregator:
         self._fallback = HeuristicProvider()
 
     def run(self, session: Session, project_id: str) -> dict[str, int]:
-        project = session.get(Project, project_id)
+        # One aggregation per project at a time: two workers reading the same `new` findings
+        # would both find no task for them and draft two. The second waits here, then finds
+        # them taken. (SQLite serializes writers anyway.)
+        project = session.get(Project, project_id, with_for_update=True)
         assert project is not None
         settings = ProjectSettings.model_validate(project.settings)
         new = session.scalars(

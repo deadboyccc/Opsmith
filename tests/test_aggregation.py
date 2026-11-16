@@ -1,8 +1,12 @@
+import threading
+import time
+from collections import Counter
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
 
+from opsmith.aggregation.aggregator import Aggregator
 from opsmith.aggregation.scoring import noisy_or, priority_for, score
 from opsmith.audit_log import transition_task
 from opsmith.db import utcnow
@@ -398,3 +402,42 @@ def test_attaching_evidence_keeps_blast_radius_and_confidence_consistent(platfor
     [task] = tasks(platform)
     assert task.confidence == created.confidence == 0.3  # repeats of one kind do not compound
     assert task.score > created.score  # more occurrences, and still three services affected
+
+
+def test_concurrent_aggregations_of_a_project_create_each_task_once(
+    platform, seed, database_url: str, monkeypatch
+) -> None:
+    """Two workers aggregating one project at once both read the same `new` findings. Without
+    a per-project lock both found no task for them and drafted two (two PRs for one defect)."""
+    if not database_url.startswith("postgresql"):
+        pytest.skip("SQLite serializes writers; the race needs PostgreSQL")
+    from opsmith.models import TaskFingerprint  # noqa: PLC0415
+
+    with platform.db.session() as s:
+        platform.audits.run(s, seed.repo.id, mode="full")
+    draft = Aggregator._draft
+
+    def slow_draft(self, session, project, group):
+        time.sleep(0.5)  # a model drafting a task takes seconds
+        return draft(self, session, project, group)
+
+    monkeypatch.setattr(Aggregator, "_draft", slow_draft)
+    errors: list[BaseException] = []
+
+    def aggregate() -> None:
+        try:
+            with platform.db.session() as s:
+                platform.aggregator.run(s, seed.project.id)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    workers = [threading.Thread(target=aggregate) for _ in range(2)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(timeout=60)
+    assert errors == []
+    with platform.db.session() as s:
+        counts = Counter(fp.fingerprint for fp in s.scalars(select(TaskFingerprint)))
+    assert counts
+    assert max(counts.values()) == 1

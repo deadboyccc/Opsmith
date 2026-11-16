@@ -62,7 +62,9 @@ class InferenceOrchestrator:
         self.max_input_tokens = max_input_tokens
 
     def run(self, session: Session, service_id: str, slot: str) -> InferenceRun | None:
-        service = session.get(Service, service_id)
+        # One run per service at a time: two runs (a manual trigger and a scheduled one) would
+        # both read the service's open leads and age or confirm them twice.
+        service = session.get(Service, service_id, with_for_update=True)
         if service is None:
             raise queue.PermanentFailure(f"service {service_id} not found")
         existing = session.scalar(

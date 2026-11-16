@@ -50,6 +50,10 @@ the database schema says so under *Upgrade notes*.
   then failed or asked to be retried later, it requeued the job although another worker was
   already running it. Every write after the handler now checks, under a row lock, that the
   worker still owns the job, and lease recovery skips a lease that is being renewed.
+- **Two workers aggregating the same project at once created duplicate tasks** (and so
+  duplicate pull requests) on PostgreSQL: both read the same new findings and both drafted a
+  task. Aggregation now locks the project, and an analysis run locks its service, so they run
+  one at a time per project and per service.
 - **A task merged a second time was never verified.** The verify job was keyed by task, so
   after a regression and a new pull request the second merge reused the first, finished job.
 - **Post-merge verification gave up silently** after four hours without data, which with the
