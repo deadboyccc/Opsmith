@@ -103,7 +103,9 @@ def head_sha(repo: Path, *, git_dir: Path | None = None) -> str:
 
 
 def changed_files(repo: Path, base: str, head: str) -> list[str]:
-    out = run_git(["diff", "--name-only", "-z", f"{base}..{head}"], repo)
+    """Paths that differ between two commits, spelled as the filesystem API spells them: a
+    name that is not UTF-8 keeps its bytes as surrogate escapes, so it still names the file."""
+    out = run_git(["diff", "--name-only", "-z", f"{base}..{head}"], repo, errors="surrogateescape")
     return [name for name in out.split("\0") if name]
 
 

@@ -104,6 +104,9 @@ class AuditRunner:
                     failed.append(analyzer.name)
                     log.exception("analyzer failed", extra={"analyzer": analyzer.name})
 
+        # File names are bytes to git and need not be UTF-8; nothing below can store or send
+        # the lone surrogates Python reads them as.
+        raws = [raw.cleaned() for raw in raws]
         # The checkout and the analyzers (minutes on a large repository) ran before anything
         # was written, so the audit's write transaction only starts here.
         run = AuditRun(

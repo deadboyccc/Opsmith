@@ -116,8 +116,15 @@ class HeuristicAgent:
         return AgentResult(True, f"Applied {applied} deterministic fix(es).", steps)
 
 
+def _lines(text: str) -> list[str]:
+    """Lines with their endings, split at LF only: the numbering the analyzers report. (The
+    workspace hands out text with LF endings; ``str.splitlines`` would also split at form
+    feeds and Unicode separators and so miss the reported line.)"""
+    return re.findall(r"[^\n]*\n|[^\n]+", text)
+
+
 def _replace_line(text: str, line: int, fn: Any) -> str | None:
-    lines = text.splitlines(keepends=True)
+    lines = _lines(text)
     if not 0 < line <= len(lines):
         return None
     updated = fn(lines[line - 1])
@@ -161,7 +168,7 @@ _ASSIGN = re.compile(
 
 
 def _fix_secret(text: str, line: int) -> str | None:
-    lines = text.splitlines(keepends=True)
+    lines = _lines(text)
     if not 0 < line <= len(lines):
         return None
     m = _ASSIGN.match(lines[line - 1].rstrip("\n"))
@@ -177,7 +184,7 @@ def _fix_secret(text: str, line: int) -> str | None:
 
 def _add_import(text: str, stmt: str) -> str:
     """Insert ``stmt`` after the module docstring and any ``from __future__`` imports."""
-    lines = text.splitlines(keepends=True)
+    lines = _lines(text)
     insert = 0
     try:
         tree = ast.parse(text)

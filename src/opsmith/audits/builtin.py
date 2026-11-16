@@ -24,6 +24,7 @@ from opsmith.audits.base import (
     AuditContext,
     RawFinding,
     register,
+    source_lines,
 )
 from opsmith.protection import path_matches
 from opsmith.redaction import SECRET_DETECTORS, Detector
@@ -99,7 +100,7 @@ class SecretsAnalyzer(Analyzer):
         for rel, text in ctx.iter_text():
             if rel.endswith(_SECRET_SKIP):
                 continue
-            for lineno, line in enumerate(text.splitlines(), start=1):
+            for lineno, line in enumerate(source_lines(text), start=1):
                 hits, masked = scan_line(line[:MAX_LINE_CHARS])
                 for det, column, secret in hits:
                     generic = det.name == "credential_assignment"
@@ -159,7 +160,7 @@ class PythonAstAnalyzer(Analyzer):
         for rel, text in ctx.iter_text((".py",)):
             try:
                 tree = ast.parse(text, filename=rel)
-                out.extend(self._visit(tree, rel, text.splitlines()))
+                out.extend(self._visit(tree, rel, source_lines(text)))
             except SyntaxError as exc:
                 out.append(
                     self._f(
@@ -623,7 +624,7 @@ class ComplianceAnalyzer(Analyzer):
             if not path_matches(rel, rule.path_glob):  # "**/*" includes root-level files
                 continue
             if forbid:
-                for lineno, line in enumerate(text.splitlines(), start=1):
+                for lineno, line in enumerate(source_lines(text), start=1):
                     if forbid.search(line[:MAX_LINE_CHARS]):
                         out.append(
                             RawFinding(

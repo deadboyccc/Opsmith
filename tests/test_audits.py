@@ -815,3 +815,49 @@ def test_analyzers_run_before_the_audit_writes_anything(platform, seed, monkeypa
     run, _, _ = run_audit(platform, seed.repo.id, mode="full")
     assert outcome == ["written"]
     assert run.started_at <= run.finished_at
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+FORM_FEED_SOURCE = (
+    "import os\n\x0c\ndef f():\n    try:\n        g()\n    except:\n        pass\n"
+    f'KEY = "{FAKE_AWS_KEY}"\n'
+)
+
+
+def test_line_numbers_ignore_form_feeds(tmp_path: Path) -> None:
+    """``str.splitlines`` also splits at form feeds and Unicode separators, which no editor,
+    compiler or git counts as a line. A file containing one got shifted line numbers and the
+    snippet of a different line."""
+    (tmp_path / "app.py").write_text(FORM_FEED_SOURCE)
+    ctx = ctx_for(tmp_path)
+    bare = next(f for f in PythonAstAnalyzer().analyze(ctx) if f.rule_id == "py.bare-except")
+    assert (bare.line, bare.snippet.strip()) == (6, "except:")
+    secret = SecretsAnalyzer().analyze(ctx)[0]
+    assert secret.line == 8
+    rule = PolicyRule(id="no-g", description="d", path_glob="*.py", forbid_regex=r"g\(\)")
+    policy = ComplianceAnalyzer().analyze(ctx_for(tmp_path, ProjectSettings(policy_rules=[rule])))
+    assert [f.line for f in policy if f.rule_id == "policy.no-g"] == [5]
+
+
+def test_a_file_name_that_is_not_utf8_does_not_fail_the_audit(platform, seed) -> None:
+    """Git stores file names as bytes. A name that is not UTF-8 used to raise
+    ``UnicodeEncodeError`` when its finding was fingerprinted, after every analyzer had run,
+    so the repository could never complete an audit again."""
+    name = os.fsdecode(b"caf\xe9.py")
+    (seed.repo_path / name).write_text("try:\n    g()\nexcept:\n    pass\n")
+    run_git(["add", "-A"], seed.repo_path)
+    run_git(["commit", "-m", "latin-1 name"], seed.repo_path, author=("t", "t@example.com"))
+    with platform.db.session() as s:
+        run = platform.audits.run(s, seed.repo.id, mode="full")
+        assert run.status == "succeeded"
+        paths = s.scalars(select(Finding.path).where(Finding.source_run_id == run.id)).all()
+        assert "caf�.py" in paths
+        seed_sha = s.get(Repository, seed.repo.id).last_audited_sha
+    # The incremental run reads the changed names from git, which must not fail either.
+    (seed.repo_path / name).write_text("try:\n    g()\nexcept:\n    h()\n")
+    run_git(["add", "-A"], seed.repo_path)
+    run_git(["commit", "-m", "again"], seed.repo_path, author=("t", "t@example.com"))
+    with platform.db.session() as s:
+        run = platform.audits.run(s, seed.repo.id, mode="incremental")
+        assert (run.mode, run.base_sha, run.files_analyzed) == ("incremental", seed_sha, 1)

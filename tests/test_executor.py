@@ -494,3 +494,15 @@ def test_unusable_work_dir_returns_the_task_to_review(platform, seed, drain, tmp
     t = task(platform, task_id)
     assert t.status == "in_review"
     assert t.execution_report["error"].startswith("infrastructure:")
+
+
+def test_codemod_finds_its_line_in_a_file_with_a_form_feed(tmp_path: Path) -> None:
+    source = "import os\n\x0c\ndef f():\n    try:\n        g()\n    except:\n        pass\n"
+    (tmp_path / "app.py").write_text(source)
+    ws = Workspace(LocalSandbox(tmp_path), {})
+    finding = {"rule_id": "py.bare-except", "path": "app.py", "line": 6}
+    res = HeuristicAgent().run(
+        AgentTask("t", "x", "fix", "p", "a", ["c"], ["app.py"], [finding]), ws, AgentBudget()
+    )
+    assert res.success
+    assert (tmp_path / "app.py").read_text() == source.replace("except:", "except Exception:")

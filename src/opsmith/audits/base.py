@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -37,6 +38,36 @@ SKIP_DIRS = {
 AUDIT_TYPES = ("security", "bugs", "compliance", "performance", "dependency", "coverage")
 
 
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+
+
+def source_lines(text: str) -> list[str]:
+    """The lines of a source file as editors, compilers and git number them: ended by LF,
+    CRLF or CR and nothing else. ``str.splitlines`` also breaks at form feeds and the Unicode
+    separators, which shifts every later line number in a file that contains one."""
+    lines = _NEWLINE.split(text)
+    if lines and not lines[-1]:
+        lines.pop()  # the text ended with a newline; there is no line after it
+    return lines
+
+
+def printable(text: str) -> str:
+    """Text that can be stored and sent. A file name that is not UTF-8 reaches Python with its
+    odd bytes as lone surrogates, which neither a database nor JSON over UTF-8 accepts; they
+    become U+FFFD here."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def _printable_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return printable(value)
+    if isinstance(value, dict):
+        return {_printable_value(k): _printable_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_printable_value(v) for v in value]
+    return value
+
+
 @dataclass
 class RawFinding:
     analyzer: str
@@ -50,6 +81,22 @@ class RawFinding:
     line: int | None = None
     snippet: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def cleaned(self) -> RawFinding:
+        """The same finding with every string made storable (see ``printable``)."""
+        return RawFinding(
+            analyzer=self.analyzer,
+            rule_id=printable(self.rule_id),
+            category=self.category,
+            title=printable(self.title),
+            description=printable(self.description or ""),
+            severity=self.severity,
+            confidence=self.confidence,
+            path=printable(self.path) if self.path else self.path,
+            line=self.line,
+            snippet=printable(self.snippet),
+            extra=_printable_value(self.extra),
+        )
 
     def fingerprint(self, repository_id: str, occurrence: int = 0) -> str:
         """Identity of the finding across commits. ``occurrence`` numbers further findings in
