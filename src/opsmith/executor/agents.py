@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from opsmith.executor.sandbox import Workspace, WorkspaceError
-from opsmith.llm.anthropic_provider import fallback_kwargs, make_client
+from opsmith.llm.anthropic_provider import fallback_kwargs, make_client, request_timeout
 from opsmith.llm.base import LLMError
 from opsmith.llm.openai_provider import ChatClient, usage_of
 from opsmith.llm.pricing import cost_usd
@@ -322,6 +322,7 @@ class ClaudeCodingAgent:
                     tools=AGENT_TOOLS,
                     messages=messages,
                     output_config={"effort": self.effort},
+                    timeout=request_timeout(self.max_tokens),
                     **fallback_kwargs(),
                 )
             except Exception as exc:  # the SDK's errors; earlier turns were still billed

@@ -506,3 +506,37 @@ def test_codemod_finds_its_line_in_a_file_with_a_form_feed(tmp_path: Path) -> No
     )
     assert res.success
     assert (tmp_path / "app.py").read_text() == source.replace("except:", "except Exception:")
+
+
+def test_claude_agent_default_output_allowance_works_with_the_real_sdk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With the real SDK (not a fake client) every turn of the Claude agent failed before a
+    request was sent: its default ``max_tokens`` is above what the SDK accepts for a
+    non-streaming call without an explicit timeout."""
+    import anthropic  # noqa: PLC0415 - only this test needs the SDK
+    import httpx2  # noqa: PLC0415
+
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
+    finish = {"type": "tool_use", "id": "tu1", "name": "finish"}
+    finish["input"] = {"success": True, "summary": "nothing to do"}
+    message = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [finish],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, json=message))
+    client = anthropic.Anthropic(
+        api_key="test-key", http_client=httpx2.Client(transport=transport), max_retries=0
+    )
+    res = ClaudeCodingAgent(client=client).run(
+        AgentTask("t", "x", "fix", "p", "a", ["c"], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(max_iterations=1),
+    )
+    assert (res.success, res.summary) == (True, "nothing to do")

@@ -218,6 +218,13 @@ class LLMGateway:
                 if exc.usage is not None:
                     record(exc.usage, int((time.perf_counter() - started) * 1000))
                 raise
+            except Exception as exc:
+                # A provider's own exception type (an SDK's rate-limit or connection error)
+                # means nothing to the stages, which handle ``LLMError``: it would pass them
+                # by and roll back the job, together with the usage of calls already billed.
+                raise LLMError(
+                    f"{provider.name} call failed: {type(exc).__name__}: {str(exc)[:300]}"
+                ) from exc
             model_used, call_cost = record(response, int((time.perf_counter() - started) * 1000))
             total_in += response.input_tokens
             total_out += response.output_tokens

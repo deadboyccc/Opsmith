@@ -42,6 +42,17 @@ def make_client(api_key_ref: str | None = None) -> Any:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
+def request_timeout(max_tokens: int) -> float:
+    """Seconds to allow one non-streaming request.
+
+    The SDK estimates a request at an hour per 128,000 output tokens and, when the caller
+    leaves the timeout to it, refuses any request it expects to run past ten minutes (more
+    than about 21,000 tokens) with a ``ValueError`` before anything is sent. Passing the
+    timeout explicitly lifts that refusal; this is the SDK's own estimate, never under its
+    ten-minute default."""
+    return float(max(600, min(3600, 3600 * max_tokens // 128_000)))
+
+
 def fallback_kwargs() -> dict[str, Any]:
     mode = os.environ.get("OPSMITH_ANTHROPIC_FALLBACKS", "default")
     if mode in {"off", "false", "0", ""}:
@@ -69,6 +80,7 @@ class AnthropicProvider:
             system=request.system,
             messages=[{"role": "user", "content": request.user}],
             output_config={"effort": request.effort, "format": output_format(request.schema)},
+            timeout=request_timeout(request.max_tokens),
             **fallback_kwargs(),
         )
         usage = getattr(response, "usage", None)

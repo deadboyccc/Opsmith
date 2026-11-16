@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from opsmith.llm import (
     AnthropicProvider,
     BudgetExceeded,
+    LLMError,
     LLMGateway,
     LLMOutputError,
     LLMRefusal,
@@ -16,7 +17,12 @@ from opsmith.llm import (
     ProviderRequest,
     ProviderResponse,
 )
-from opsmith.llm.anthropic_provider import FALLBACK_BETA, fallback_kwargs, output_format
+from opsmith.llm.anthropic_provider import (
+    FALLBACK_BETA,
+    fallback_kwargs,
+    output_format,
+    request_timeout,
+)
 from opsmith.llm.pricing import PRICES, cost_usd
 from opsmith.llm.prompts import get_prompt
 from opsmith.models import Project, UsageRecord
@@ -400,3 +406,69 @@ def test_untrusted_content_cannot_close_its_own_data_block() -> None:
     assert user.rstrip().endswith("Respond only with JSON matching the required schema.")
     body = user.split("<untrusted_data>\n", 1)[1].rsplit("\n</untrusted_data>", 1)[0]
     assert json.loads(body)["bundles"][0]["message"] == hostile  # nothing lost, only escaped
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def _anthropic_then_overloaded() -> AnthropicProvider:
+    """The real SDK: one billed reply that does not fit the schema, then HTTP 529."""
+    calls: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request)
+        if len(calls) > 1:
+            error = {"type": "overloaded_error", "message": "Overloaded"}
+            return httpx2.Response(529, json={"type": "error", "error": error})
+        return httpx2.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": _text('{"answer": "far too long"}'),
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 50_000, "output_tokens": 5_000},
+            },
+        )
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        http_client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+        max_retries=0,
+    )
+    return AnthropicProvider(client=client)
+
+
+def test_a_providers_own_exception_surfaces_as_llm_error(platform, seed) -> None:
+    """An SDK exception (rate limit, overload, connection) is not an ``LLMError``. It went
+    straight through the stages that catch ``LLMError``: the job's transaction was rolled
+    back with the usage of the calls already billed, and no fallback ran."""
+    _project(platform, seed)
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        with pytest.raises(LLMError, match="anthropic call failed: OverloadedError"):
+            _gateway(_anthropic_then_overloaded()).structured(
+                s,
+                project=project,
+                stage="x",
+                prompt_id="audit.triage",
+                variables={},
+                schema=Bounded,
+            )
+        record = s.query(UsageRecord).one()  # the billed first call is still to be committed
+        assert (record.input_tokens, record.output_tokens) == (50_000, 5_000)
+
+
+@pytest.mark.parametrize("max_tokens", [16_000, 32_000, 128_000])
+def test_anthropic_provider_accepts_a_large_output_allowance(max_tokens) -> None:
+    """The SDK refuses a non-streaming request it expects to run for more than ten minutes
+    (more than about 21,000 output tokens) unless the caller sets the timeout itself."""
+    provider, sent = _anthropic({})
+    request = _req()
+    request.max_tokens = max_tokens
+    assert provider.complete(request).input_tokens == 100
+    assert json.loads(sent[0].content)["max_tokens"] == max_tokens
+    assert request_timeout(max_tokens) >= 600
