@@ -1,10 +1,18 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 
-from opsmith.connectors import ConnectorError, available_types, build_connector
+from opsmith.connectors import (
+    ConnectorError,
+    FetchResult,
+    LogConnector,
+    available_types,
+    build_connector,
+)
 from opsmith.db import utcnow
 from opsmith.localfs import LocalAccessError
 from opsmith.models import Connector
@@ -537,3 +545,66 @@ def test_push_only_connectors_accept_pushes_and_poll_nothing(platform, seed, dra
         record = {"timestamp": utcnow().isoformat(), "service": "payments-api", "message": "hi"}
         batches = platform.ingestion.ingest_push(s, s.get(Connector, connector_id), [record])
         assert sum(b.record_count for b in batches) == 1
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def _prometheus(config: dict[str, Any]) -> list[Any]:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        series = {"metric": {"service": "api"}, "values": [[START.timestamp(), "0.5"]]}
+        return httpx.Response(200, json={"status": "success", "data": {"result": [series]}})
+
+    conn = build_connector(
+        "prometheus",
+        {"url": "http://prom:9090", "queries": [{"name": "q", "promql": "up"}], **config},
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=fake_dns,
+    )
+    return conn.fetch(START, END, {}).metrics
+
+
+def test_prometheus_points_take_the_configured_environment() -> None:
+    """The connector never set an environment, so its metrics could only ever belong to a
+    ``production`` service."""
+    assert [p.environment for p in _prometheus({})] == ["production"]
+    assert [p.environment for p in _prometheus({"environment": "staging"})] == ["staging"]
+
+
+@pytest.mark.parametrize("value", [1e300, float("inf"), -5, "soon"])
+def test_an_unusable_baseline_look_back_falls_back_to_the_default(value: Any) -> None:
+    """``timedelta`` overflows on a huge value, which failed every run of the connector."""
+    assert len(_prometheus({"baseline_seconds": value})) == 1
+
+
+def test_a_connector_closes_the_http_client_it_opened() -> None:
+    conn = build_connector(
+        "prometheus", {"url": "http://prom:9090", "queries": []}, resolver=fake_dns
+    )
+    opened = conn.http
+    conn.close()
+    assert opened.is_closed
+    # A client that was handed in belongs to the caller.
+    shared = httpx.Client(transport=httpx.MockTransport(lambda _r: httpx.Response(200)))
+    conn = build_connector(
+        "prometheus", {"url": "http://prom:9090", "queries": []}, http=shared, resolver=fake_dns
+    )
+    conn.close()
+    assert not shared.is_closed
+
+
+def test_a_plugin_connector_gets_its_entry_point_name(monkeypatch) -> None:
+    """A connector registered through an entry point (not ``@register``) had no
+    ``type_name``, so every error message it built raised ``AttributeError`` instead."""
+    from opsmith.connectors import base  # noqa: PLC0415
+
+    class Plugin(LogConnector):
+        def fetch(self, start: datetime, end: datetime, cursor: dict[str, Any]) -> FetchResult:
+            return FetchResult()
+
+    entry = SimpleNamespace(name="acme_logs", load=lambda: Plugin)
+    monkeypatch.setattr(base, "entry_points", lambda group: [entry])
+    monkeypatch.setattr(base, "_ENTRYPOINTS_LOADED", False)
+    monkeypatch.setitem(base._REGISTRY, "acme_logs", Plugin)
+    monkeypatch.delitem(base._REGISTRY, "acme_logs")
+    assert build_connector("acme_logs", {}).type_name == "acme_logs"

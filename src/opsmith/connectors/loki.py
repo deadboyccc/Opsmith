@@ -140,7 +140,7 @@ class LokiConnector(LogConnector):
         return LogEvent(
             timestamp=_from_ns(ts_ns),
             service=labels.get(service_label) or self.default_service,
-            environment=labels.get("env", labels.get("environment", "production")),
+            environment=labels.get("env", labels.get("environment", self.environment)),
             severity=line_sev or severity or "info",
             message=message,
             attributes={**labels, **attrs},

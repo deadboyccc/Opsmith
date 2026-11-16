@@ -25,7 +25,7 @@ class PrometheusConnector(MetricConnector):
 
     def fetch(self, start: datetime, end: datetime, cursor: dict[str, Any]) -> FetchResult:
         url = self.base_url() + "/api/v1/query_range"
-        lookback = timedelta(seconds=float(self.config.get("baseline_seconds", 6 * 3600)))
+        lookback = timedelta(seconds=self.seconds("baseline_seconds", 6 * 3600))
         service_label = self.config.get("service_label", "service")
         queries = self.config.get("queries", [])
         if not isinstance(queries, list) or not all(
@@ -78,6 +78,7 @@ class PrometheusConnector(MetricConnector):
                         MetricPoint(
                             timestamp=moment,
                             service=service,
+                            environment=self.environment,
                             name=query["name"],
                             value=val,
                             labels=metric_labels,

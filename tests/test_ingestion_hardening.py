@@ -844,3 +844,63 @@ def test_quoted_epoch_milliseconds_are_not_read_as_a_calendar_date() -> None:
     assert parse_ts("1795011232") == datetime(2026, 11, 18, 14, 13, 52, tzinfo=UTC)
     assert parse_ts("2026-11-18T03:33:52Z") == datetime(2026, 11, 18, 3, 33, 52, tzinfo=UTC)
     assert parse_ts("20261118T033352Z") == datetime(2026, 11, 18, 3, 33, 52, tzinfo=UTC)
+
+
+def test_a_linked_services_environment_is_the_connectors_default(
+    platform: Platform, seed: Seed, ingestion: IngestionService
+) -> None:
+    """A connector linked to a staging service passed on only the service's name, so its
+    records (which carry no environment) went to a newly discovered ``production`` service
+    of the same name, with no owner, no repository and its own inference schedule."""
+    start = _start(seed)
+    with platform.db.session() as s:
+        staging = Service(
+            tenant_id=seed.tenant.id,
+            project_id=seed.project.id,
+            name="checkout",
+            environment="staging",
+        )
+        s.add(staging)
+        s.flush()
+        conn = s.get(Connector, seed.log_connector.id)
+        assert conn is not None
+        conn.service_id = staging.id
+        staging_id = staging.id
+    records = [_log(start, i, f"failed {i}") for i in range(3)]
+    for record in records:
+        del record["service"]
+    write_logs(seed.logs, records)
+    with platform.db.session() as s:
+        ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+        assert s.scalars(select(RawBatch.service_id)).all() == [staging_id]
+        names = s.execute(select(Service.name, Service.environment)).all()
+        assert ("checkout", "production") not in [tuple(n) for n in names]
+
+
+def test_the_connector_is_closed_after_a_run(platform: Platform, seed: Seed) -> None:
+    """Each run built a connector with its own HTTP client and never closed it."""
+    closed: list[bool] = []
+
+    class Tracked(LogConnector):
+        type_name = "tracked"
+
+        def fetch(self, start: datetime, end: datetime, cursor: dict[str, Any]) -> FetchResult:
+            if self.config.get("fail"):
+                raise ConnectorError("down")
+            return FetchResult()
+
+        def close(self) -> None:
+            closed.append(True)
+
+    service = IngestionService(platform.store, lambda _type, config, **kw: Tracked(config, **kw))
+    start = _start(seed)
+    with platform.db.session() as s:
+        service.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+    assert closed == [True]
+    with platform.db.session() as s:
+        conn = s.get(Connector, seed.log_connector.id)
+        assert conn is not None
+        conn.config = {"fail": True}
+    with platform.db.session() as s, pytest.raises(ConnectorError):
+        service.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=12))
+    assert closed == [True, True]

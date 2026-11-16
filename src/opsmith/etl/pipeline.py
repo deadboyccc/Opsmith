@@ -254,9 +254,14 @@ class IngestionService:
             return {"skipped": "empty window"}
         end = min(end, start + MAX_WINDOW)
         default_service = "unknown"
+        config = conn.config
         if conn.service_id:
             svc = session.get(Service, conn.service_id)
             default_service = svc.name if svc else default_service
+            if svc is not None and not config.get("environment"):
+                # Records without an environment belong to the linked service, not to a
+                # ``production`` service of the same name.
+                config = {**config, "environment": svc.environment}
         try:
             credential = resolve_tenant_credential(conn.credentials_ref)
         except CredentialRefError as exc:
@@ -268,13 +273,18 @@ class IngestionService:
         try:
             impl = self.connector_factory(
                 conn.type,
-                conn.config,
+                config,
                 default_service=default_service,
                 credential=credential,
                 **confinement,
             )
-            with METRICS.timer("opsmith_stage_seconds", stage="ingest"):
-                result = impl.fetch(start, end, dict(conn.cursor))
+            try:
+                with METRICS.timer("opsmith_stage_seconds", stage="ingest"):
+                    result = impl.fetch(start, end, dict(conn.cursor))
+            finally:
+                close = getattr(impl, "close", None)  # connectors written before 1.2.1
+                if callable(close):
+                    close()
         except LocalAccessError as exc:  # a path outside the local root: retrying cannot help
             raise queue.PermanentFailure(f"connector {conn_name}: {exc}") from exc
         end = _reached(result.cursor, start, end)

@@ -152,6 +152,7 @@ class BaseConnector(ABC):
         self.default_service = default_service
         self.credential = credential
         self._http = http
+        self._owns_http = http is None  # a client handed in belongs to the caller
         self.local_root = local_root
         self.local_deny = tuple(local_deny)
         self._resolver = resolver
@@ -175,6 +176,29 @@ class BaseConnector(ABC):
             headers = {"Authorization": f"Bearer {self.credential}"} if self.credential else {}
             self._http = httpx.Client(timeout=self.timeout, headers=headers)
         return self._http
+
+    def close(self) -> None:
+        """Release the HTTP client this connector opened. Called after every run."""
+        # getattr: a connector whose own ``__init__`` does not call this class's has neither.
+        client = getattr(self, "_http", None)
+        if getattr(self, "_owns_http", False) and client is not None:
+            client.close()
+            self._http = None
+
+    @property
+    def environment(self) -> str:
+        """Environment for records that carry none: the connector's ``environment`` setting
+        (the linked service's environment when the connector does not set one)."""
+        return str(self.config.get("environment") or "production")
+
+    def seconds(self, key: str, default: float, maximum: float = 30 * 86_400.0) -> float:
+        """A duration from the configuration, or ``default`` when the value is not a number
+        between zero and ``maximum`` (a larger one overflows a ``timedelta``)."""
+        try:
+            value = float(self.config.get(key, default))
+        except (TypeError, ValueError):
+            return default
+        return value if 0 <= value <= maximum else default  # False for NaN too
 
     def base_url(self) -> str:
         """The validated base URL. Called on construction and again before every fetch, so
@@ -248,6 +272,8 @@ def _load_entrypoints() -> None:
     for ep in entry_points(group="opsmith.connectors"):
         try:
             cls = ep.load()
+            if not getattr(cls, "type_name", None):
+                cls.type_name = ep.name  # what ``@register`` sets; error messages use it
             _REGISTRY.setdefault(ep.name, cls)
         except Exception:  # a broken plugin must not take the platform down
             log.exception("failed to load connector plugin", extra={"plugin": ep.name})

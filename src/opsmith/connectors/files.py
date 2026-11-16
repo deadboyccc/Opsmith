@@ -157,7 +157,7 @@ class FileLogConnector(LogConnector):
         return LogEvent(
             timestamp=parse_ts(raw[fields["timestamp"]]),
             service=str(raw.get(fields["service"]) or self.default_service),
-            environment=str(raw.get("environment", self.config.get("environment", "production"))),
+            environment=str(raw.get("environment", self.environment)),
             severity=str(raw.get(fields["severity"], "info")),
             message=str(raw[fields["message"]]),
             attributes={k: v for k, v in raw.items() if k not in known},
@@ -174,7 +174,7 @@ class FileLogConnector(LogConnector):
         return LogEvent(
             timestamp=parse_ts(groups["timestamp"]),
             service=groups.get("service") or self.default_service,
-            environment=self.config.get("environment", "production"),
+            environment=self.environment,
             severity=groups.get("severity") or "info",
             message=groups.get("message") or "",
         )
@@ -186,9 +186,8 @@ class FileMetricConnector(MetricConnector):
     ``baseline_seconds`` look-back (default 6h) is included for anomaly baselines."""
 
     def fetch(self, start: datetime, end: datetime, cursor: dict[str, Any]) -> FetchResult:
-        lookback = float(self.config.get("baseline_seconds", 6 * 3600))
-        lower = start.timestamp() - lookback
-        environment = self.config.get("environment", "production")
+        lower = start.timestamp() - self.seconds("baseline_seconds", 6 * 3600)
+        environment = self.environment
         points: list[MetricPoint] = []
         skipped = 0
         for path in confined_files(self.config.get("path"), self.local_root, self.local_deny):
