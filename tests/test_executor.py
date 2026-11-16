@@ -313,3 +313,41 @@ def test_findings_feed_agent_task(platform, seed) -> None:
         agent_task = platform.executor._agent_task(s, s.get(Task, task_id))
         assert agent_task.findings[0]["rule_id"] == "py.http-no-timeout"
         assert s.scalars(select(Finding)).first().task_id == task_id
+
+
+def test_claude_agent_keeps_what_it_spent_when_a_call_fails(tmp_path: Path, monkeypatch) -> None:
+    """A provider error part-way through must not lose the turns already billed."""
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
+    client = FakeClaude([[{"name": "list_files", "input": {"path": "."}}]])  # then runs dry
+
+    def create(**kwargs: Any) -> Any:
+        if not client.script:
+            raise RuntimeError("overloaded")
+        return FakeClaude.create(client, **kwargs)
+
+    client.messages = SimpleNamespace(create=create)
+    agent = ClaudeCodingAgent(client=client, model="claude-opus-5-5")
+    res = agent.run(
+        AgentTask("t", "x", "fix", "", "", [], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(),
+    )
+    assert not res.success
+    assert res.retryable
+    assert "overloaded" in res.summary
+    assert (res.input_tokens, res.output_tokens) == (1000, 100)
+    assert res.cost_usd > 0
+
+
+def test_claude_agent_stops_when_the_cost_budget_is_spent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
+    client = FakeClaude([[{"name": "list_files", "input": {"path": "."}}]] * 10)
+    agent = ClaudeCodingAgent(client=client, model="claude-opus-5-5")
+    # One turn is 1000 input + 100 output tokens of claude-opus-5-5: $0.006.
+    res = agent.run(
+        AgentTask("t", "x", "fix", "", "", [], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(max_iterations=5, max_cost_usd=0.01),
+    )
+    assert res.summary == "Cost budget exhausted."
+    assert len(client.calls) == 2

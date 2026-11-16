@@ -22,6 +22,7 @@ from typing import Any, Protocol
 
 from opsmith.executor.sandbox import Workspace, WorkspaceError
 from opsmith.llm.anthropic_provider import fallback_kwargs, make_client
+from opsmith.llm.base import LLMError
 from opsmith.llm.openai_provider import ChatClient, usage_of
 from opsmith.llm.pricing import cost_usd
 from opsmith.llm.prompts import INJECTION_GUARD, untrusted_json
@@ -45,6 +46,17 @@ class AgentTask:
 class AgentBudget:
     max_iterations: int = 8
     max_tokens: int = 400_000
+    # What this run may still spend: the per-run cap or what is left of the project's daily
+    # budget, whichever is lower.
+    max_cost_usd: float = float("inf")
+
+    def exhausted(self, tokens: int, cost: float) -> str | None:
+        """Why the agent must stop now, or ``None`` while it may continue."""
+        if tokens >= self.max_tokens:
+            return "Token budget exhausted."
+        if cost >= self.max_cost_usd:
+            return "Cost budget exhausted."
+        return None
 
 
 @dataclass
@@ -56,6 +68,9 @@ class AgentResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     retryable: bool = False
+    # Filled in by the execution service from the agent that ran, for usage accounting.
+    provider: str = ""
+    model: str = ""
 
 
 class CodingAgent(Protocol):
@@ -69,6 +84,7 @@ class CodingAgent(Protocol):
 
 class HeuristicAgent:
     name = "heuristic"
+    provider = "heuristic"  # no model call, no cost
 
     def run(self, task: AgentTask, ws: Workspace, budget: AgentBudget) -> AgentResult:
         steps: list[dict[str, Any]] = [{"step": "plan", "detail": "apply deterministic codemods"}]
@@ -253,6 +269,7 @@ AGENT_SYSTEM = (
 
 class ClaudeCodingAgent:
     name = "claude"
+    provider = "anthropic"
 
     def __init__(
         self,
@@ -281,17 +298,21 @@ class ClaudeCodingAgent:
         tin = tout = 0
         cost = 0.0
         for turn in range(budget.max_iterations * 4):  # several tool calls per iteration
-            if tin + tout >= budget.max_tokens:
-                return AgentResult(False, "Token budget exhausted.", steps, tin, tout, cost)
-            resp = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=AGENT_SYSTEM,
-                tools=AGENT_TOOLS,
-                messages=messages,
-                output_config={"effort": self.effort},
-                **fallback_kwargs(),
-            )
+            stop = budget.exhausted(tin + tout, cost)
+            if stop:
+                return AgentResult(False, stop, steps, tin, tout, cost)
+            try:
+                resp = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=AGENT_SYSTEM,
+                    tools=AGENT_TOOLS,
+                    messages=messages,
+                    output_config={"effort": self.effort},
+                    **fallback_kwargs(),
+                )
+            except Exception as exc:  # the SDK's errors; earlier turns were still billed
+                return _endpoint_failure(exc, steps, tin, tout, cost)
             usage = resp.usage
             tin += int(getattr(usage, "input_tokens", 0) or 0)
             tout += int(getattr(usage, "output_tokens", 0) or 0)
@@ -340,6 +361,16 @@ class ClaudeCodingAgent:
             if finished is not None:
                 return AgentResult(finished[0], finished[1][:2000], steps, tin, tout, cost)
         return AgentResult(False, "Iteration budget exhausted.", steps, tin, tout, cost)
+
+
+def _endpoint_failure(
+    exc: Exception, steps: list[dict[str, Any]], tin: int, tout: int, cost: float
+) -> AgentResult:
+    """A model call failed part-way through a run. Returned as a result rather than raised, so
+    what the earlier turns cost is still recorded; retryable, because it is usually transient."""
+    log.warning("coding agent model call failed", extra={"error": type(exc).__name__})
+    summary = f"Model call failed: {type(exc).__name__}: {str(exc)[:300]}"
+    return AgentResult(False, summary, steps, tin, tout, cost, retryable=True)
 
 
 def dispatch_tool(ws: Workspace, name: str, args: Any) -> tuple[str, bool]:
@@ -400,6 +431,7 @@ class OpenAICodingAgent:
     """
 
     name = "openai"
+    provider = "openai"
 
     def __init__(
         self,
@@ -437,12 +469,16 @@ class OpenAICodingAgent:
         tin = tout = 0
         cost = 0.0
         for turn in range(budget.max_iterations * 4):  # several tool calls per iteration
-            if tin + tout >= budget.max_tokens:
-                return AgentResult(False, "Token budget exhausted.", steps, tin, tout, cost)
-            body = self.client.chat(
-                {"model": self.model, "messages": messages, "tools": self._tools()},
-                max_tokens=self.max_tokens,
-            )
+            stop = budget.exhausted(tin + tout, cost)
+            if stop:
+                return AgentResult(False, stop, steps, tin, tout, cost)
+            try:
+                body = self.client.chat(
+                    {"model": self.model, "messages": messages, "tools": self._tools()},
+                    max_tokens=self.max_tokens,
+                )
+            except LLMError as exc:  # earlier turns were still billed
+                return _endpoint_failure(exc, steps, tin, tout, cost)
             used_in, used_out = usage_of(body)
             tin, tout = tin + used_in, tout + used_out
             cost = cost_usd(self.model, tin, tout, prices=self.prices)

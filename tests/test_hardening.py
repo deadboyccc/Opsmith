@@ -35,6 +35,7 @@ from opsmith.executor.sandbox import (
 )
 from opsmith.executor.service import sandbox_policy_error
 from opsmith.gitutil import run_git, staged_added_lines, worktree_changes
+from opsmith.llm import BudgetGuard
 from opsmith.models import (
     AuditLog,
     ExecutionRun,
@@ -46,6 +47,7 @@ from opsmith.models import (
     Review,
     Schedule,
     Task,
+    UsageRecord,
     User,
 )
 from opsmith.platform import Platform
@@ -789,3 +791,128 @@ def test_long_metric_series_keep_a_bounded_stable_signal() -> None:
     assert len(one) == len(two) == 200
     assert one != two  # distinct series stay distinct after bounding
     assert one == metric_signal(f"latency_ms{{{labels}}}")  # and stable across runs
+
+
+# --------------------------------------------------------------------------- executor budgets
+
+
+class SpendingAgent:
+    """Stands in for a model-driven agent: it edits one file and reports what it spent."""
+
+    name = "scripted"
+    provider = "openai"
+    model = "some-model"
+
+    def __init__(self, cost: float = 0.25) -> None:
+        self.cost = cost
+        self.budgets: list[AgentBudget] = []
+
+    def run(self, task: AgentTask, ws: Workspace, budget: AgentBudget) -> AgentResult:
+        self.budgets.append(budget)
+        ws.write_file("app/extra.py", "VALUE = 1\n")
+        return AgentResult(True, "edited", [], 1200, 300, self.cost)
+
+
+def _budgets(platform: Platform, seed: Any, **budgets: Any) -> None:
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        project.settings = {**project.settings, "budgets": budgets}
+
+
+def test_coding_agent_spending_is_recorded_and_counts_toward_the_daily_budget(
+    platform, seed, drain
+) -> None:
+    agent = SpendingAgent(cost=0.25)
+    _use_agent(platform, seed, agent)
+    _budgets(platform, seed, max_cost_per_run_usd=2.0, max_cost_per_day_usd=10.0)
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    assert task(platform, task_id).status == "pr_open"
+    with platform.db.session() as s:
+        [usage] = s.scalars(select(UsageRecord).where(UsageRecord.stage == "executor")).all()
+        run = s.scalars(select(ExecutionRun)).one()
+        assert (usage.provider, usage.model, usage.run_id) == ("openai", "some-model", run.id)
+        assert (usage.input_tokens, usage.output_tokens, usage.cost_usd) == (1200, 300, 0.25)
+        project = s.get(Project, seed.project.id)
+        assert BudgetGuard(s, project).spent_today() == 0.25  # what the daily cap reads
+    # The agent was told what it may spend: the per-run cap, since more than that is left today.
+    assert agent.budgets[0].max_cost_usd == 2.0
+
+
+def test_an_exhausted_daily_budget_stops_the_execution_before_any_model_call(
+    platform, seed, drain
+) -> None:
+    agent = SpendingAgent()
+    _use_agent(platform, seed, agent)
+    _budgets(platform, seed, max_cost_per_day_usd=1.0)
+    with platform.db.session() as s:
+        s.add(
+            UsageRecord(
+                tenant_id=seed.tenant.id,
+                project_id=seed.project.id,
+                stage="inference",
+                provider="openai",
+                model="m",
+                cost_usd=1.0,
+            )
+        )
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    t = task(platform, task_id)
+    assert t.status == "in_review"
+    assert t.execution_report["error"].startswith("budget:")
+    assert agent.budgets == []  # never started
+    assert not _pr_branches(seed)
+
+
+def test_the_agent_may_only_spend_what_is_left_of_the_day(platform, seed, drain) -> None:
+    agent = SpendingAgent()
+    _use_agent(platform, seed, agent)
+    _budgets(platform, seed, max_cost_per_run_usd=5.0, max_cost_per_day_usd=1.0)
+    with platform.db.session() as s:
+        s.add(
+            UsageRecord(
+                tenant_id=seed.tenant.id,
+                project_id=seed.project.id,
+                stage="task",
+                provider="openai",
+                model="m",
+                cost_usd=0.75,
+            )
+        )
+    approve(platform, seed, make_task(platform, seed))
+    drain()
+    assert agent.budgets[0].max_cost_usd == pytest.approx(0.25)
+
+
+def test_offline_agent_is_not_limited_by_cost_budgets(platform, seed, drain) -> None:
+    """The heuristic agent makes no model call, so an exhausted budget must not block it."""
+    _budgets(platform, seed, max_cost_per_day_usd=0.0)
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    assert task(platform, task_id).status == "pr_open"
+    with platform.db.session() as s:
+        assert s.scalars(select(UsageRecord).where(UsageRecord.stage == "executor")).all() == []
+
+
+def test_unknown_executor_agent_fails_with_a_clear_report(platform, seed, drain) -> None:
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        project.settings = {**project.settings, "executor_agent": "gpt"}
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    report = task(platform, task_id).execution_report["error"]
+    assert "unknown executor_agent 'gpt'" in report
+    assert "heuristic" in report
+
+
+def test_agent_budget_stops_on_tokens_or_cost() -> None:
+    budget = AgentBudget(max_tokens=1000, max_cost_usd=0.5)
+    assert budget.exhausted(999, 0.49) is None
+    assert budget.exhausted(1000, 0.0) == "Token budget exhausted."
+    assert budget.exhausted(10, 0.5) == "Cost budget exhausted."
+    assert AgentBudget().exhausted(10, 1_000_000.0) is None  # no cost cap unless one is given

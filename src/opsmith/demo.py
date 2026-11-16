@@ -186,7 +186,16 @@ def _drain(platform: Platform) -> list[queue.WorkResult]:
     return platform.worker().drain()
 
 
-def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = None) -> DemoResult:
+def run_demo(
+    base: Path,
+    *,
+    verbose: bool = True,
+    database_url: str | None = None,
+    project_settings: dict[str, Any] | None = None,
+) -> DemoResult:
+    """Run the scenario. ``project_settings`` overrides the demo project's settings, for
+    example to route the model stages to another provider than the offline default."""
+
     def say(msg: str) -> None:
         result.steps.append(msg)
         if verbose:
@@ -217,14 +226,17 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
         tenant = create_tenant(s, f"demo-{now:%H%M%S}-{new_id('x')[-6:]}")
         admin, admin_key = create_user(s, tenant, "Demo Admin", "admin")
         reviewer, reviewer_key = create_user(s, tenant, "Riley Reviewer", "reviewer")
-        project_settings = ProjectSettings(
-            executor_agent="heuristic",
-            verification_delay_hours=0.0,
-            inference_interval_hours=6,
-            lead_max_carry=2,
+        settings_model = ProjectSettings.model_validate(
+            {
+                "executor_agent": "heuristic",
+                "verification_delay_hours": 0.0,
+                "inference_interval_hours": 6,
+                "lead_max_carry": 2,
+                **(project_settings or {}),
+            }
         )
         project = Project(
-            tenant_id=tenant.id, name="payments", settings=project_settings.model_dump(mode="json")
+            tenant_id=tenant.id, name="payments", settings=settings_model.model_dump(mode="json")
         )
         s.add(project)
         s.flush()

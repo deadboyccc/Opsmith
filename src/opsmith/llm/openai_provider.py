@@ -40,6 +40,7 @@ JSON_MODES = ("json_schema", "json_object")
 # Model calls can take minutes; the connect timeout stays short so a wrong URL fails fast.
 _TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n?```\s*$", re.DOTALL)
+_THINK = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
 
 
 class EndpointError(LLMError):
@@ -120,7 +121,9 @@ def usage_of(body: dict[str, Any]) -> tuple[int, int]:
 
 
 def strip_fence(text: str) -> str:
-    """Models that ignore the response format often wrap JSON in a Markdown code fence."""
+    """Unwrap JSON from what models add around it when the server does not enforce the
+    format: a leading ``<think>...</think>`` block (reasoning models) and a Markdown fence."""
+    text = _THINK.sub("", text, count=1)
     match = _FENCE.match(text)
     return match.group(1) if match else text
 
@@ -161,12 +164,18 @@ class OpenAICompatibleProvider:
         try:
             body = self.client.chat(self._payload(request), max_tokens=request.max_tokens)
         except EndpointError as exc:
-            # A server without json_schema support rejects the request as invalid; fall back
-            # once and keep using the simpler mode for the rest of this process.
+            # A server without json_schema support rejects the request as invalid. Try the
+            # simpler mode once. The switch is only remembered if that attempt works: a
+            # request rejected for another reason (too long, unknown model) fails here again
+            # and must not cost every later call its schema enforcement.
             if self.json_mode != "json_schema" or exc.status not in {400, 404, 422, 501}:
                 raise
             self.json_mode = "json_object"
-            body = self.client.chat(self._payload(request), max_tokens=request.max_tokens)
+            try:
+                body = self.client.chat(self._payload(request), max_tokens=request.max_tokens)
+            except EndpointError:
+                self.json_mode = "json_schema"
+                raise exc from None
         choice = body["choices"][0]
         message = choice.get("message") or {}
         tokens_in, tokens_out = usage_of(body)

@@ -430,3 +430,135 @@ def test_live_endpoint_coding_agent(tmp_path: Path) -> None:
     result = agent.run(task, ws, AgentBudget(max_iterations=4))
     assert any(step["tool"] for step in result.steps), "the model made no tool calls"
     assert result.input_tokens > 0
+
+
+# --------------------------------------------------------------------------- robustness
+
+
+def test_an_unrelated_400_does_not_downgrade_schema_enforcement() -> None:
+    """A request rejected for another reason (too long, unknown model) also fails the simpler
+    retry. That must not be remembered as "this server cannot do json_schema"."""
+    too_long = (400, {"error": {"message": "maximum context length exceeded"}})
+    server = Server(too_long, too_long, _completion('{"answer": "ok"}'))
+    provider = OpenAICompatibleProvider(server.client())
+    with pytest.raises(LLMError, match="maximum context length"):
+        provider.complete(_request())
+    provider.complete(_request())
+    assert [r["response_format"]["type"] for r in server.requests] == [
+        "json_schema",
+        "json_object",  # the one probe
+        "json_schema",  # enforcement is back for the next call
+    ]
+
+
+def test_reasoning_preamble_before_json_is_removed() -> None:
+    body = (
+        '<think>\nThe user wants JSON. {"not": "this"}\n</think>\n\n```json\n{"answer": "x"}\n```'
+    )
+    data = OpenAICompatibleProvider(Server(_completion(body)).client()).complete(_request()).data
+    assert Out.model_validate_json(data).answer == "x"
+
+
+def test_mixed_providers_per_stage(platform, seed) -> None:
+    """Each stage uses its own provider: here triage stays on the offline rules while task
+    drafting goes to the endpoint."""
+    server = Server(_completion('{"answer": "from endpoint"}'))
+    platform.gateway.providers["openai"] = OpenAICompatibleProvider(server.client())
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        project.settings = {
+            **project.settings,
+            "llm": {
+                "stages": {
+                    "task": {
+                        "provider": "openai",
+                        "model": "m",
+                        "input_price_per_mtok": 0,
+                        "output_price_per_mtok": 0,
+                    }
+                }
+            },
+        }
+        result = platform.gateway.structured(
+            s, project=project, stage="task", prompt_id="audit.triage", variables={}, schema=Out
+        )
+        assert (result.provider, result.output.answer) == ("openai", "from endpoint")
+        settings = ProjectSettings.model_validate(project.settings)
+        assert settings.llm.for_stage("triage").provider == "heuristic"
+        assert settings.llm.for_stage("task").provider == "openai"
+    assert len(server.requests) == 1
+
+
+def test_settings_stored_before_prices_existed_still_load() -> None:
+    old = {"llm": {"default": {"provider": "anthropic", "model": "claude-opus-5-5"}}}
+    settings = ProjectSettings.model_validate(old)
+    assert settings.llm.default.prices is None
+    assert ProjectSettings.model_validate(settings.model_dump(mode="json")) == settings
+    assert ProjectSettings().llm.default.provider == "heuristic"  # the default is unchanged
+
+
+def test_openai_stage_can_be_configured_through_the_api_and_toml(platform, seed, tmp_path) -> None:
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from opsmith.api.app import create_app  # noqa: PLC0415
+    from opsmith.configfile import apply_config  # noqa: PLC0415
+    from opsmith.models import Tenant  # noqa: PLC0415
+
+    stage = {
+        "provider": "openai",
+        "model": "qwen2.5-coder:14b",
+        "input_price_per_mtok": 0,
+        "output_price_per_mtok": 0,
+    }
+    client = TestClient(create_app(platform))
+    auth = {"Authorization": f"Bearer {seed.keys['admin']}"}
+    url = f"/api/v1/projects/{seed.project.id}/settings"
+    body = {"settings": {"executor_agent": "openai", "llm": {"default": stage}}}
+    ok = client.patch(url, json=body, headers=auth)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["settings"]["llm"]["default"]["model"] == "qwen2.5-coder:14b"
+    half = {"settings": {"llm": {"default": {**stage, "output_price_per_mtok": None}}}}
+    assert client.patch(url, json=half, headers=auth).status_code == 422
+    typo = {"settings": {"llm": {"default": {**stage, "input_price": 1}}}}
+    assert client.patch(url, json=typo, headers=auth).status_code == 422
+    with platform.db.session() as s:
+        [project] = apply_config(
+            s,
+            s.get(Tenant, seed.tenant.id),
+            {"projects": [{"name": "local-models", "settings": {"llm": {"default": stage}}}]},
+        )
+        assert project.settings["llm"]["default"]["provider"] == "openai"
+
+
+def test_coding_agent_stops_when_the_cost_budget_is_spent(tmp_path: Path) -> None:
+    listing = _turn(_tool_call(0, "list_files", {"path": "."}))
+    server = Server(*[listing] * 10)
+    # 100 prompt + 20 completion tokens per turn at these prices is $0.14 a turn.
+    agent = OpenAICodingAgent(client=server.client(), model="m", prices=(1000.0, 2000.0))
+    result = agent.run(
+        AgentTask("t", "x", "fix", "", "", [], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(max_iterations=5, max_cost_usd=0.25),
+    )
+    assert not result.success
+    assert result.summary == "Cost budget exhausted."
+    assert len(server.requests) == 2  # the third call was never made
+    assert result.cost_usd == pytest.approx(0.28)
+
+
+def test_coding_agent_keeps_what_it_spent_when_the_endpoint_fails(tmp_path: Path) -> None:
+    server = Server(
+        _turn(_tool_call(0, "list_files", {"path": "."})),
+        (503, {"error": {"message": "overloaded"}}),
+    )
+    agent = OpenAICodingAgent(client=server.client(), model="m", prices=(1.0, 2.0))
+    result = agent.run(
+        AgentTask("t", "x", "fix", "", "", [], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(),
+    )
+    assert not result.success
+    assert result.retryable  # usually transient: worth another attempt
+    assert "HTTP 503" in result.summary
+    assert (result.input_tokens, result.output_tokens) == (100, 20)  # the first turn was billed
+    assert result.cost_usd > 0

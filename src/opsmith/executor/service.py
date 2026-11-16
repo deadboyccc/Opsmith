@@ -46,7 +46,16 @@ from opsmith.executor.sandbox import (
     make_sandbox,
 )
 from opsmith.gitutil import GitError, head_sha, run_git, staged_added_lines, worktree_changes
-from opsmith.models import ExecutionRun, Finding, Project, Repository, Review, Task
+from opsmith.llm import BudgetExceeded, BudgetGuard
+from opsmith.models import (
+    ExecutionRun,
+    Finding,
+    Project,
+    Repository,
+    Review,
+    Task,
+    UsageRecord,
+)
 from opsmith.observability import METRICS
 from opsmith.protection import classify, protected_hits
 from opsmith.redaction import SECRET_DETECTORS
@@ -279,6 +288,22 @@ class ExecutionService:
                 run.input_tokens = out.agent.input_tokens
                 run.output_tokens = out.agent.output_tokens
                 run.cost_usd = out.agent.cost_usd
+                if out.agent.input_tokens or out.agent.output_tokens:
+                    # The same ledger every other stage writes to: this is what the daily
+                    # budget and the cost dashboard read.
+                    s.add(
+                        UsageRecord(
+                            tenant_id=run.tenant_id,
+                            project_id=run.project_id,
+                            stage="executor",
+                            run_id=run.id,
+                            provider=out.agent.provider or run.agent,
+                            model=out.agent.model or run.agent,
+                            input_tokens=out.agent.input_tokens,
+                            output_tokens=out.agent.output_tokens,
+                            cost_usd=out.agent.cost_usd,
+                        )
+                    )
             run.finished_at = utcnow()
             METRICS.inc("opsmith_executions_total", outcome=run.status)
 
@@ -314,8 +339,8 @@ class ExecutionService:
             )
 
         try:
-            provider = self.scm.for_provider(repo.scm_provider)
-            workdir = provider.checkout(repo, tmp / "repo")
+            scm = self.scm.for_provider(repo.scm_provider)
+            workdir = scm.checkout(repo, tmp / "repo")
             # The checkout's remote is removed so the sandboxed agent holds no SCM handle.
             run_git(["remote", "remove", "origin"], workdir)
             run_git(["checkout", "-B", branch], workdir)
@@ -341,12 +366,23 @@ class ExecutionService:
             ws = Workspace(
                 sandbox, checks, timeout=min(900, settings.budgets.max_execution_seconds)
             )
-            agent = self.agent_factories[settings.executor_agent](settings)
+            factory = self.agent_factories.get(settings.executor_agent)
+            if factory is None:
+                return fail(
+                    f"unknown executor_agent {settings.executor_agent!r}; "
+                    f"available: {sorted(self.agent_factories)}"
+                )
+            agent = factory(settings)
+            provider = str(getattr(agent, "provider", "") or "")
+            spends = provider not in {"", "heuristic"}
             budget = AgentBudget(
                 max_iterations=settings.budgets.max_agent_iterations,
                 max_tokens=settings.budgets.max_tokens_per_run,
+                # The agent's spending counts against the same caps as every other stage.
+                max_cost_usd=self._cost_allowance(task_id, settings) if spends else float("inf"),
             )
             result = agent.run(agent_task, ws, budget)
+            result.provider, result.model = provider, str(getattr(agent, "model", "") or "")
             if time.monotonic() - started > settings.budgets.max_execution_seconds:
                 return fail("execution time budget exceeded")
             if not result.success:
@@ -409,9 +445,9 @@ class ExecutionService:
                     sandbox=self.settings.sandbox_backend,
                 )
                 title = f"[opsmith] {task_row.title}"[:250]
-            provider.push_branch(repo, workdir, branch, git_dir=git_dir)
+            scm.push_branch(repo, workdir, branch, git_dir=git_dir)
             steps.append({"step": "push", "branch": branch, "sha": sha})
-            pr = provider.create_pull_request(repo, branch=branch, title=title, body=body)
+            pr = scm.create_pull_request(repo, branch=branch, title=title, body=body)
             steps.append({"step": "pull_request", "url": pr.url})
             return AttemptOutcome(
                 True,
@@ -429,6 +465,8 @@ class ExecutionService:
             )
         except ApprovalError as exc:
             return fail(f"approval: {exc}")
+        except BudgetExceeded as exc:
+            return fail(f"budget: {exc}")
         except SandboxUnavailable as exc:
             return fail(f"sandbox unavailable: {exc}")
         except (GitError, SCMError, OSError) as exc:
@@ -439,6 +477,20 @@ class ExecutionService:
             return fail(f"error: {type(exc).__name__}: {exc}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _cost_allowance(self, task_id: str, settings: ProjectSettings) -> float:
+        """What a model-driven agent may spend on this attempt: the per-run cap, or what is
+        left of the project's daily budget if that is less. Raises ``BudgetExceeded`` when the
+        daily budget is already used up, so no model call is made at all."""
+        with self.db.session() as s:
+            task = s.get(Task, task_id)
+            assert task is not None
+            project = s.get(Project, task.project_id)
+            assert project is not None
+            guard = BudgetGuard(s, project)
+            guard.check(None, 0)
+            left_today = settings.budgets.max_cost_per_day_usd - guard.spent_today()
+        return max(min(settings.budgets.max_cost_per_run_usd, left_today), 0.0)
 
     def _diff_gates(
         self,
