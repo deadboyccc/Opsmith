@@ -89,7 +89,7 @@ class ReviewRequest(BaseModel):
 
     decision: Literal["approve", "approve_with_edits", "reject", "defer", "request_investigation"]
     comment: str = ""
-    reason_code: str | None = None
+    reason_code: str | None = Field(default=None, max_length=50)  # the column's size
     edits: dict[str, Any] = Field(default_factory=dict)
     elevated_ack: bool = False
     investigation: str | None = None  # hypothesis/question for the next inference run
@@ -221,11 +221,13 @@ class ReviewService:
             raise ReviewError(f"fields not editable: {sorted(unknown)}")
         if not edits:
             raise ReviewError("approve_with_edits requires at least one edit")
-        if "priority" in edits and edits["priority"] not in {"P0", "P1", "P2", "P3"}:
+        # Tuples, not sets: a JSON list or object is unhashable, and must be refused here
+        # rather than raise TypeError out of a membership test.
+        if "priority" in edits and edits["priority"] not in ("P0", "P1", "P2", "P3"):
             raise ReviewError("priority must be P0-P3")
         if "category" in edits and edits["category"] not in CATEGORIES:
             raise ReviewError(f"category must be one of {CATEGORIES}")
-        if "effort_estimate" in edits and edits["effort_estimate"] not in {"S", "M", "L"}:
+        if "effort_estimate" in edits and edits["effort_estimate"] not in ("S", "M", "L"):
             raise ReviewError("effort_estimate must be S, M or L")
         for key, limit in _TEXT_LIMITS.items():
             if key in edits and not (

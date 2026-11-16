@@ -162,3 +162,20 @@ def test_excluded_paths_cannot_be_approved(platform, seed, task_id) -> None:
 def test_stale_version_is_rejected(platform, seed, task_id) -> None:
     with pytest.raises(ReviewError, match="changed since"):
         review(platform, seed.reviewer.id, task_id, decision="approve", expected_version=999)
+
+
+def test_edits_of_the_wrong_type_are_refused_not_crashed(platform, seed, task_id) -> None:
+    """A JSON list or object where a string belongs used to raise ``TypeError`` (a 500):
+    the allowed values are kept in a set, and membership needs a hashable value."""
+    for edits in ({"priority": ["P0"]}, {"effort_estimate": {"size": "S"}}, {"category": ["fix"]}):
+        with pytest.raises(ReviewError):
+            review(platform, seed.reviewer.id, task_id, decision="approve_with_edits", edits=edits)
+    assert status(platform, task_id) == "in_review"
+
+
+def test_reason_code_is_bounded_to_its_column() -> None:
+    """Only ``reject`` checked the reason code. Any other decision stored it unchecked, which
+    PostgreSQL refuses for more than 50 characters (a 500 instead of a validation error)."""
+    with pytest.raises(ValueError, match="reason_code"):
+        ReviewRequest(decision="defer", reason_code="x" * 51)
+    assert ReviewRequest(decision="defer", reason_code="too_risky").reason_code == "too_risky"
