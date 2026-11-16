@@ -201,9 +201,8 @@ Honest scope, so you can judge it:
 | Production use | None yet. No load tests, no long-running deployment |
 
 There are no published quality metrics yet (precision of findings, share of pull requests
-merged, verified-fix rate). That, a tested connector matrix and schema migrations are the main
-open work; see the [changelog](CHANGELOG.md) and
-[the review response](docs/development/review-response.md).
+merged, verified-fix rate). That and a tested connector matrix are the main open work; see the
+[changelog](CHANGELOG.md) and [the review response](docs/development/review-response.md).
 
 ## Documentation
 

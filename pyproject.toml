@@ -1,6 +1,6 @@
 [project]
 name = "opsmith"
-version = "1.0.0"
+version = "1.1.0"
 description = "Autonomous engineering ops platform: observe -> analyze -> propose -> human approve -> execute -> PR."
 readme = "README.md"
 license = "MIT"
@@ -21,6 +21,7 @@ dependencies = [
   "jinja2>=3.1",
   "httpx>=0.27",
   "python-multipart>=0.0.9",
+  "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

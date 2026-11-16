@@ -44,6 +44,8 @@ def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    # Alembic narrates every start at INFO; opsmith.migrations logs what actually changed.
+    logging.getLogger("alembic").setLevel(logging.WARNING)
 
 
 _BUCKETS = (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900)

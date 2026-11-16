@@ -80,11 +80,11 @@ class Database:
         self.engine = make_engine(url)
         self._factory = sessionmaker(bind=self.engine, expire_on_commit=False)
 
-    def create_all(self) -> None:
-        # Importing models registers every table on Base.metadata.
-        from opsmith import models  # noqa: F401, PLC0415
+    def migrate(self) -> None:
+        """Bring the schema to the newest revision (``opsmith.migrations``, ADR-002)."""
+        from opsmith.migrations import upgrade  # noqa: PLC0415 - alembic loads lazily
 
-        Base.metadata.create_all(self.engine)
+        upgrade(self.engine)
 
     @contextmanager
     def session(self) -> Iterator[Session]:

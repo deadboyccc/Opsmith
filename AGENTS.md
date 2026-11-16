@@ -49,6 +49,7 @@ OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@localhost:5432/op
 |---|---|
 | `src/opsmith/platform.py` | Composition root and queue handler wiring. Start here. |
 | `models.py`, `schemas.py` | ORM entities (all tenant-scoped) / pydantic contracts incl. settings and LLM stage I/O |
+| `migrations/` | Alembic revisions of the schema, applied by every process at start (ADR-002) |
 | `queue.py`, `scheduler.py` | Durable idempotent jobs with leased, heartbeated claims; cron/interval schedules |
 | `audit_log.py` | Append-only audit trail, task/lead state machines, run immutability |
 | `config.py`, `localfs.py` | Process settings and credential references; confinement of host-file access |
@@ -136,8 +137,11 @@ to its tests). If a change seems to require weakening one, stop and ask a human.
   line-based formats: file names are attacker-controlled.
 - Validate at the edge. Project settings are range-checked in `schemas.ProjectSettings`; add a
   bound whenever you add a setting, because a bad value otherwise fails later inside a job.
-- There are no schema migrations yet (ADR-002). A model change that alters the schema must be
-  called out in `CHANGELOG.md`.
+- **A model change that alters the schema needs a migration** (ADR-002): a new revision in
+  `src/opsmith/migrations/versions/`, written with `uv run alembic revision --autogenerate`
+  (see `docs/development/architecture.md`). Never edit a released revision.
+  `tests/test_migrations.py` fails when the models and the revisions disagree. Call the change
+  out under *Upgrade notes* in `CHANGELOG.md`.
 
 ## Extending
 

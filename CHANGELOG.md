@@ -4,6 +4,24 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.1.0 - 2026-11-16
+
+### Upgrade notes
+
+- **Opsmith now migrates its database.** Every process brings the schema to the newest
+  revision when it starts; there is no separate step. A database created by 1.0.0 is adopted
+  as it is, with its data. Stop all processes and take a backup before upgrading
+  ([Operations](docs/guide/operations.md#upgrading)).
+- A process now refuses to start, with a `database schema:` message, on a database from before
+  1.0.0 or one migrated by a newer release.
+
+### Added
+
+- Schema migrations with Alembic (`src/opsmith/migrations/`; ADR-002). Revision `0001` is the
+  1.0.0 schema. On PostgreSQL, processes that start together are serialized by an advisory
+  lock. `tests/test_migrations.py` fails when the models and the revisions disagree, on SQLite
+  and PostgreSQL. New dependency: `alembic`.
+
 ## 1.0.0 - 2026-11-16
 
 The first stable release. A hardening release that follows the

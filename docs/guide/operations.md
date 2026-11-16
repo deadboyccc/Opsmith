@@ -66,18 +66,31 @@ to.
 
 ## Upgrading
 
-Opsmith creates its tables at start and has **no schema migrations yet**
-([ADR-002](../../ARCHITECTURE_DECISIONS.md)). A release that changes the schema says so under
-*Upgrade notes* in the [changelog](../../CHANGELOG.md); until migrations exist, such an upgrade
-needs a fresh database, so back up first (see [Backups](#backups)) and do not rely on keeping
-the review history and audit trail across such an upgrade.
+Opsmith migrates its database itself: every process brings the schema to the newest revision
+when it starts, so an upgrade needs no separate step
+([ADR-002](../../ARCHITECTURE_DECISIONS.md)). Releases that change the schema say so under
+*Upgrade notes* in the [changelog](../../CHANGELOG.md). On PostgreSQL, processes that start
+together wait for each other; one of them migrates.
 
-To upgrade a Compose installation without a schema change:
+Stop the processes before you upgrade, so that nothing old runs against the new schema, and
+take a backup (see [Backups](#backups)): the backup is how you go back to an older release.
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose stop api worker scheduler    # the database keeps running for the backup
+# back up the database and the data directory here
+docker compose up -d --build                # the first process to start migrates
 ```
+
+A process refuses to start, with a message that starts `database schema:`, when:
+
+- the database was created by a release before 1.0.0. There is nothing to migrate it from;
+  start from a fresh database, as the 1.0.0 upgrade notes say.
+- the database was migrated by a newer release than the one starting. Run the newer release,
+  or restore the backup taken before the upgrade.
+
+A database created by 1.0.0, which had no migrations, is recognized and adopted when a newer
+release first opens it.
 
 ## Troubleshooting
 

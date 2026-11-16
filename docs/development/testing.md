@@ -39,7 +39,9 @@ OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@127.0.0.1:5432/op
 ```
 
 Run the suite on PostgreSQL when you touch models or queries: it enforces column lengths and
-types that SQLite ignores.
+types that SQLite ignores. Every test database is built by the migrations, and
+`tests/test_migrations.py` fails when they and the models disagree, so a model change without a
+migration fails on both backends.
 
 A green run without Docker proves less than one with it, because the container tests were
 skipped. `uv run pytest -q -rs` lists what was skipped and why.

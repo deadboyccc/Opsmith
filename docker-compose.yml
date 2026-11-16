@@ -57,7 +57,7 @@ services:
       disable: true  # no HTTP port; liveness is visible via job metrics and dead jobs
     depends_on:
       api:
-        condition: service_healthy  # api creates the schema on first start
+        condition: service_healthy  # api applies the schema migrations first
 
   scheduler:
     <<: *opsmith

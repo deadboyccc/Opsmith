@@ -83,7 +83,7 @@ class Platform:
         self.settings = settings or Settings.from_env()
         self.settings.ensure_dirs()
         self.db = Database(self.settings.resolved_database_url)
-        self.db.create_all()
+        self.db.migrate()
         self.store = LocalObjectStore(self.settings.object_store_dir)
         self.gateway = gateway or default_gateway(self.settings)
         self.scm = scm or SCMRegistry(

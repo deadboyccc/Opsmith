@@ -146,7 +146,6 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
   become a pull request a human must merge.
 - **`/healthz` and `/metrics` are unauthenticated.** Keep the API port private.
 - **API keys are bearer credentials** with no expiry or rotation yet. SSO is future work.
-- **No schema migrations yet;** see [Operations](operations.md#upgrading).
 
 ## Hardening checklist
 

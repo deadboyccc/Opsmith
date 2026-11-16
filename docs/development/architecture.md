@@ -180,6 +180,7 @@ Each of these has a test that tries to defeat it; [Security](../guide/security.m
 |---|---|
 | `platform.py` | Wires everything together and maps job kinds to handlers. Start reading here |
 | `models.py`, `schemas.py` | Database entities; settings and model-output schemas |
+| `migrations/` | Schema migrations (Alembic), applied when a process starts |
 | `connectors/`, `etl/` | Signal sources (Loki, Prometheus, files, push); normalize, redact, store, bundle |
 | `redaction.py` | Secret and PII detectors, shared by ingestion, the gateway and the diff gate |
 | `inference/orchestrator.py` | Chained analysis runs and the lead lifecycle |
@@ -236,3 +237,18 @@ Changes inside Opsmith:
   `ui/templates/macros.html`, `dashboard.FUNNEL`, and add an ADR entry.
 - **A new setting:** add it to `schemas.ProjectSettings` with a bound, document it in
   [Configuration](../guide/configuration.md), and add it to `opsmith.example.toml`.
+- **A schema change:** change `models.py`, then write a revision against a scratch database
+  that is at the newest revision:
+
+  ```bash
+  export OPSMITH_DATABASE_URL=sqlite:////tmp/opsmith-migrations.db
+  uv run alembic upgrade head
+  uv run alembic revision --autogenerate --rev-id 0002 -m "add tasks.owner"
+  uv run alembic upgrade head && uv run alembic check   # "No new upgrade operations detected."
+  ```
+
+  Number revisions in sequence and read what was generated: autogenerate misses renames
+  (it drops and adds) and server defaults, and a new non-null column on an existing table
+  needs a default or a data step. Never edit a released revision. Run
+  `tests/test_migrations.py` on PostgreSQL as well (see [Testing](testing.md)), and add an
+  *Upgrade notes* entry to the changelog. Details are in ADR-002.

@@ -252,7 +252,12 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:  # includes pydantic's ValidationError
         raise SystemExit(f"invalid OPSMITH_* configuration:\n{exc}") from None
     configure_logging(settings.log_level, settings.log_json)
-    result: int = args.func(args, settings)
+    from opsmith.migrations import SchemaError  # noqa: PLC0415 - keep `--help` fast
+
+    try:
+        result: int = args.func(args, settings)
+    except SchemaError as exc:
+        raise SystemExit(f"database schema: {exc}") from None
     return result
 
 

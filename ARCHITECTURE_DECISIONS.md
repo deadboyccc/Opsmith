@@ -20,7 +20,7 @@ calls) are preserved by every decision below.
   (for example high-volume ETL) can later move to another language behind the same queue
   contracts.
 
-## ADR-002 Storage: PostgreSQL in production, SQLite for dev/tests; schema via `create_all`
+## ADR-002 Storage: PostgreSQL in production, SQLite for dev/tests; schema via Alembic migrations
 
 - **Decision.** Every entity lives in one relational schema with `tenant_id` on every row.
   SQLite is the zero-ops default, and PostgreSQL (`postgresql+psycopg://`) is the production
@@ -29,9 +29,29 @@ calls) are preserved by every decision below.
 - **Alternatives.** PostgreSQL only; a document store for bundles and runs.
 - **Reason.** Relational integrity matters for the provenance chain and the state machines.
   JSON columns cover semi-structured payloads.
-- **Deviation and follow-up.** Tables are created with `metadata.create_all`. Alembic
-  migrations must be introduced before the first production schema change. Until then a
-  release that changes the schema needs a fresh database and says so in `CHANGELOG.md`.
+- **Schema changes.** The schema is defined by Alembic revisions in `src/opsmith/migrations/`,
+  which ship with the package. Revision `0001` is the 1.0.0 schema. Up to 1.0.0 tables were
+  created with `metadata.create_all`; that was replaced after 1.0.0, before the first schema
+  change.
+  - *Applied at start.* Every process brings the database to the newest revision when it
+    starts (`Database.migrate`), as `create_all` did, so an upgrade needs no extra step. On
+    PostgreSQL the upgrade runs in one transaction under an advisory lock, so the API, worker
+    and scheduler can start together: one migrates and the others find nothing to do.
+  - *Existing databases.* A database without a version table that has the 1.0.0 tables and
+    columns is adopted by stamping it `0001`. One from before 1.0.0 is refused with a message:
+    there is nothing to migrate it from. A database at a revision the code does not know (a
+    newer release wrote it) is refused rather than used.
+  - *Revisions are frozen.* A released revision is never edited. Revisions use plain
+    SQLAlchemy types, not Opsmith's own, so they keep their meaning when the models change.
+    `tests/test_migrations.py` fails when the models and the revisions disagree, on SQLite and
+    PostgreSQL, and when there is more than one head.
+  - *No constraint naming convention.* Adding one would make databases created by the
+    revisions differ from those 1.0.0 created. Revisions that drop an unnamed constraint look
+    its name up instead.
+- **Alternatives for migrations.** A separate `migrate` command or container before the
+  processes start: safer for zero-downtime rolling upgrades, but one more step to forget, and
+  Opsmith upgrades by stopping and restarting its processes (see Operations). Hand-written SQL
+  per backend: two dialects to keep in step by hand.
 
 ## ADR-003 Queue: durable DB-backed job queue instead of a message broker
 
@@ -318,7 +338,8 @@ calls) are preserved by every decision below.
 
 ## Known limitations (MVP)
 
-- `create_all` instead of migrations (ADR-002). A schema change needs a fresh database.
+- Upgrades are stop-and-start, not rolling: an older process must not run against a newer
+  schema. Concurrent first starts are serialized on PostgreSQL only (ADR-002).
 - With SQLite, a long LLM call or audit holds the writer lock; use PostgreSQL for concurrent
   workers.
 - The Docker sandbox is a container, not a VM, and one sandbox image serves every repository a
