@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from opsmith.executor.sandbox import Workspace, WorkspaceError
-from opsmith.llm.anthropic_provider import fallback_kwargs, make_client, request_timeout
+from opsmith.llm.anthropic_provider import (
+    fallback_kwargs,
+    input_tokens_of,
+    make_client,
+    request_timeout,
+)
 from opsmith.llm.base import LLMError
 from opsmith.llm.openai_provider import ChatClient, usage_of
 from opsmith.llm.pricing import cost_usd
@@ -328,7 +333,7 @@ class ClaudeCodingAgent:
             except Exception as exc:  # the SDK's errors; earlier turns were still billed
                 return _endpoint_failure(exc, steps, tin, tout, cost)
             usage = resp.usage
-            tin += int(getattr(usage, "input_tokens", 0) or 0)
+            tin += input_tokens_of(usage)[0]
             tout += int(getattr(usage, "output_tokens", 0) or 0)
             cost = cost_usd(self.model, tin, tout)
             if resp.stop_reason == "refusal":

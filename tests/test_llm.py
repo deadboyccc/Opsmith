@@ -513,3 +513,20 @@ def test_model_output_is_made_storable(schema, reply) -> None:
         dumped = json.dumps(output.model_dump(mode="json"))
         assert "\\u0000" not in dumped
         assert "\\ud83d" not in dumped
+
+
+def test_anthropic_cached_input_is_counted_and_costed() -> None:
+    """The API reports cached input apart from ``input_tokens``. The provider passed
+    ``input_tokens`` on as the total, so a call that read 5,000 tokens from the cache and
+    wrote 2,000 to it was counted, and costed, as its 1,000 uncached tokens only."""
+    usage = {
+        "input_tokens": 1_000,
+        "cache_read_input_tokens": 5_000,
+        "cache_creation_input_tokens": 2_000,
+        "output_tokens": 20,
+    }
+    provider, _ = _anthropic({"usage": usage})
+    response = provider.complete(_req())
+    assert (response.input_tokens, response.cache_read_tokens) == (8_000, 5_000)
+    cost = cost_usd("claude-opus-5-5", response.input_tokens, 20, response.cache_read_tokens)
+    assert cost == pytest.approx((3_000 * 4.00 + 5_000 * 0.20 + 20 * 20.00) / 1_000_000)

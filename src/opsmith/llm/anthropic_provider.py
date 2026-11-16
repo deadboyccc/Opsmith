@@ -53,6 +53,20 @@ def request_timeout(max_tokens: int) -> float:
     return float(max(600, min(3600, 3600 * max_tokens // 128_000)))
 
 
+def input_tokens_of(usage: Any) -> tuple[int, int]:
+    """``(all input tokens, of which read from the cache)``.
+
+    The API reports cached input apart from ``input_tokens``: tokens read from the cache and
+    tokens written to it are separate fields. The budgets count every token, and the price
+    list costs cache reads at their own rate and everything else at the input rate."""
+
+    def field(name: str) -> int:
+        return int(getattr(usage, name, 0) or 0)
+
+    cache_read = field("cache_read_input_tokens")
+    return field("input_tokens") + cache_read + field("cache_creation_input_tokens"), cache_read
+
+
 def fallback_kwargs() -> dict[str, Any]:
     mode = os.environ.get("OPSMITH_ANTHROPIC_FALLBACKS", "default")
     if mode in {"off", "false", "0", ""}:
@@ -84,11 +98,12 @@ class AnthropicProvider:
             **fallback_kwargs(),
         )
         usage = getattr(response, "usage", None)
+        total_in, cache_read = input_tokens_of(usage)
         billed = ProviderResponse(
             data="",
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            input_tokens=total_in,
             output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+            cache_read_tokens=cache_read,
             model=str(getattr(response, "model", request.model) or request.model),
         )
         if response.stop_reason in {"refusal", "max_tokens"}:
