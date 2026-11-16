@@ -14,6 +14,10 @@ from typing import Any
 
 from opsmith.llm.base import ProviderRequest, ProviderResponse
 
+# The longest title the stage schemas accept (``schemas.InferenceFinding``, ``NewLead``). The
+# rules' output is validated like a model's, so a longer title fails the whole run.
+MAX_TITLE_CHARS = 300
+
 _PLACEHOLDER = re.compile(r"(?i)example|dummy|placeholder|changeme|xxx+|test|fake|sample")
 _VENDORED = re.compile(r"(^|/)(node_modules|vendor|third_party|\.venv|venv|dist|build)/")
 _TEST_PATH = re.compile(r"(^|/)(tests?|fixtures?|examples?|testdata|__tests__)/|_test\.|test_")
@@ -196,7 +200,7 @@ class HeuristicProvider:
             else:
                 new_leads.append(
                     {
-                        "title": f"Metric anomaly: {m['series']}",
+                        "title": f"Metric anomaly: {m['series']}"[:MAX_TITLE_CHARS],
                         "hypothesis": (
                             f"{m['name']} deviates from baseline (delta {m.get('delta_pct')}%, "
                             f"z={m.get('z_score')}); check whether it persists."
@@ -266,7 +270,7 @@ class HeuristicProvider:
         name = m["name"].lower()
         category = "performance" if re.search(r"latency|duration|cpu|memory|p9", name) else "fix"
         return {
-            "title": f"Regression in {m['series']}",
+            "title": f"Regression in {m['series']}"[:MAX_TITLE_CHARS],
             "description": (
                 f"{m['name']} mean {m.get('mean')} vs baseline {m.get('baseline_mean')} "
                 f"(delta {m.get('delta_pct')}%, p95 shift {m.get('p95_shift_pct')}%, z={z})."

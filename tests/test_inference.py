@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from opsmith.audit_log import ImmutableRecordError
+from opsmith.db import utcnow
 from opsmith.inference.orchestrator import InferenceOrchestrator
 from opsmith.llm import HeuristicProvider, LLMGateway, ProviderRequest, ProviderResponse
 from opsmith.models import (
@@ -520,3 +521,43 @@ def test_provenance_lists_an_investigation_lead_once(platform, seed) -> None:
         s.flush()
         listed = [row["id"] for row in task_provenance(s, task)["leads"]]
         assert sorted(listed) == sorted([lead.id, other.id])
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+@pytest.mark.parametrize("z_score", [9.0, 3.5])  # a finding, and a lead
+def test_a_long_metric_series_name_does_not_stall_inference(platform, seed, z_score) -> None:
+    """The built-in rules put the whole series key in a title. A series with a few ordinary
+    labels is longer than the 300 characters a title may have, so the rules' own output failed
+    validation; the bundle stayed unconsumed and every later run failed on it again."""
+    labels = ",".join(f"label_{i}=value-number-{i}-of-a-kubernetes-pod" for i in range(8))
+    key = "http_server_request_duration_seconds{" + labels + "}"
+    assert len(key) > 300
+    feature = {
+        "series": key,
+        "name": "http_server_request_duration_seconds",
+        "signal": ("metric:" + key)[:200],
+        "anomalous": True,
+        "z_score": z_score,
+        "delta_pct": 250.0,
+        "ref": "bundle:bnd_long#metric:" + key,
+    }
+    now = utcnow()
+    with platform.db.session() as s:
+        s.add(
+            AnalysisBundle(
+                id="bnd_long",
+                tenant_id=seed.tenant.id,
+                project_id=seed.project.id,
+                service_id=seed.service.id,
+                window_start=now - timedelta(hours=6),
+                window_end=now,
+                metric_features=[feature],
+                token_estimate=100,
+            )
+        )
+    with platform.db.session() as s:
+        run = platform.inference.run(s, seed.service.id, "slot-long")
+        assert (run.status, run.error) == ("succeeded", None)
+        assert s.get(AnalysisBundle, "bnd_long").consumed_by_run_id == run.id
