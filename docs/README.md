@@ -30,6 +30,7 @@ For people who change it.
 | [Testing](development/testing.md) | Run and write tests, including on PostgreSQL, with real containers and against a live model |
 | [Architecture decisions](../ARCHITECTURE_DECISIONS.md) | See why each design choice was made, and the known limitations |
 | [Changelog](../CHANGELOG.md) | See what changed |
+| [Repository About text](development/repository-about.md) | Copy-paste the description, website and topics for the GitHub About section |
 
 ## Background
 
