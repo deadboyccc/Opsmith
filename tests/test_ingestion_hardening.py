@@ -904,3 +904,24 @@ def test_the_connector_is_closed_after_a_run(platform: Platform, seed: Seed) -> 
     with platform.db.session() as s, pytest.raises(ConnectorError):
         service.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=12))
     assert closed == [True, True]
+
+
+def test_oversized_stack_paths_do_not_evict_the_other_templates(
+    platform: Platform, seed: Seed, ingestion: IngestionService, drain: Any
+) -> None:
+    """A template's source locations were kept at any length. A few error lines with
+    15,000-character paths made one template larger than the whole bundle budget, and trimming
+    from the tail then removed every template: no log evidence left for the window."""
+    start = _start(seed)
+    records = [_log(start, i / 10, f"database connection refused attempt {i}") for i in range(500)]
+    for i in range(600):
+        path = "/app/" + "x" * 15_000 + f"{i % 4}.py"
+        records.append(_log(start, 60 + i / 10, f'boom File "{path}", line 1'))
+    write_logs(seed.logs, records)
+    with platform.db.session() as s:
+        ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+    assert [r.status for r in drain() if r.kind == "build_bundles"] == ["succeeded"]
+    with platform.db.session() as s:
+        templates = s.scalars(select(AnalysisBundle)).one().log_templates
+    assert any("database connection refused" in t["template"] for t in templates)
+    assert all(len(loc["path"]) <= 500 for t in templates for loc in t["locations"])

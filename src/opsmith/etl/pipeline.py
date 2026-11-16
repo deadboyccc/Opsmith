@@ -69,6 +69,7 @@ SEVERITY_ALIASES = {
 _SEV_WEIGHT = {"debug": 0.2, "info": 0.5, "warning": 2.0, "error": 4.0, "critical": 6.0}
 _LOC_ATTRS = ("stack", "stacktrace", "stack_trace", "exception", "traceback", "error.stack")
 MAX_TEMPLATES = 40
+MAX_VERSION_CHARS = 100  # a version is a short label; longer ones are cut in the bundle
 MAX_SAMPLES = 3
 SAMPLE_CHARS = 400
 # Longest message / attribute / label string kept. Longer ones are truncated before any
@@ -673,7 +674,13 @@ class BundleBuilder:
                         locations.append(loc)
             fp = fingerprint_of(service, cluster.template)
             stamps = sorted((rec["timestamp"] for rec, _ in members), key=_instant)
-            versions = sorted({str(rec["version"]) for rec, _ in members if rec.get("version")})
+            versions = sorted(
+                {
+                    str(rec["version"])[:MAX_VERSION_CHARS]
+                    for rec, _ in members
+                    if rec.get("version")
+                }
+            )
             out.append(
                 {
                     "ref": f"bundle:{bundle_id}#tpl:{fp}",

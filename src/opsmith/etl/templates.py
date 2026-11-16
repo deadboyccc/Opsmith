@@ -31,6 +31,7 @@ _MASKS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|us|ns|kb|mb|gb|%)?\b", re.IGNORECASE), "<num>"),
 )
 _WILDCARD = "<*>"
+MAX_LOCATION_PATH_CHARS = 500  # the size of the columns a path ends up in
 # Line numbers are at most seven digits: ``int()`` refuses a number of several thousand
 # digits, and no source file has ten million lines.
 _LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -75,6 +76,8 @@ def extract_locations(text: str) -> list[tuple[str, int]]:
     for pattern in _LOCATION_PATTERNS:
         for match in pattern.finditer(text):
             loc = (_repo_relative(match.group("path")), int(match.group("line")))
+            if len(loc[0]) > MAX_LOCATION_PATH_CHARS:
+                continue  # not a path anyone can open, and it would fill the bundle
             if loc not in found:
                 found.append(loc)
     return found
