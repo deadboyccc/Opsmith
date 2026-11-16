@@ -150,7 +150,11 @@ A hardening release that follows the
 - Documentation, split by reader ([index](docs/README.md)): a user guide under `docs/guide/`
   (getting started, UI tour, concepts, configuration, models, deployment, operations, API,
   security) and contributor pages under `docs/development/` (architecture, testing), plus
-  `CONTRIBUTING.md` and this file. `scripts/check_docs.py` checks every link and anchor in CI.
+  `CONTRIBUTING.md` and this file. `scripts/check_docs.py` runs in CI and compares the docs with
+  the code: links, anchors, cited tests, environment variables, project settings, API
+  endpoints, notification events, connector types, states, providers and commands.
+- A weekly and on-demand workflow that runs the OpenAI-compatible provider and coding agent
+  against a real Ollama server.
 
 ## 0.1.0
 

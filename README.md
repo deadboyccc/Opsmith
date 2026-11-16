@@ -195,8 +195,9 @@ Honest scope, so you can judge it:
 | Safety gates | `tests/test_hardening.py` and friends attack each guarantee: approval binding, gate bypasses, sandbox escapes, cross-tenant access, role escalation |
 | Docker sandbox | Tested with **real containers** (network, filesystem, capabilities, timeouts, and a full execution). Skipped automatically where Docker is absent |
 | Compose deployment | Built and started end to end, including the worker starting sandbox containers through the overlay |
+| Documentation | Every command in [Getting started](docs/guide/getting-started.md) was run as written. A check in CI compares the docs with the code: links, cited tests, environment variables, settings, API endpoints, events, connector types, states and commands |
 | GitHub, Loki, Prometheus | Tested against **mocked HTTP** only. Not yet exercised against live services in CI |
-| Models | The offline rule-based provider drives the tests and the demo. The OpenAI-compatible provider and its coding agent are tested against a scripted endpoint, and were run **live against Ollama** with a small open model (structured output, a pipeline stage, the tool-calling loop). Claude is tested against **fake clients** only |
+| Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested against **fake clients** only |
 | Production use | None yet. No load tests, no long-running deployment |
 
 There are no published quality metrics yet (precision of findings, share of pull requests

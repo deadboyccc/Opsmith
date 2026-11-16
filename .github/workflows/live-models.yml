@@ -1,0 +1,47 @@
+# Runs the provider-neutral model path against a real model server.
+#
+# The regular CI tests the OpenAI-compatible provider and coding agent against a scripted
+# endpoint. This workflow starts Ollama with a small open model and runs the same code against
+# it: structured output, and the tool-calling agent loop. It needs no secrets.
+#
+# It is slow (it downloads a model and runs it on CPU), so it runs on demand and once a week,
+# not on every push.
+name: Live models
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ollama model to test with (must support tool calling)
+        default: qwen2.5:1.5b
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  ollama:
+    name: OpenAI-compatible provider against Ollama
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      MODEL: ${{ inputs.model || 'qwen2.5:1.5b' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.5"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: Start Ollama and pull the model
+        run: |
+          docker run -d --name ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          until curl -sf http://127.0.0.1:11434/api/version; do sleep 1; done
+          docker exec ollama ollama pull "$MODEL"
+      - name: Live tests
+        env:
+          OPSMITH_TEST_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+          OPSMITH_TEST_OPENAI_MODEL: ${{ env.MODEL }}
+        run: uv run pytest tests/test_openai_provider.py -k live -v -rA

@@ -282,8 +282,12 @@ max_agent_iterations = 8            # how long the coding agent may keep trying
 max_concurrent_executions = 2       # executions running at once in this project
 ```
 
+The caps cover every stage that calls a model, including the coding agent.
+
 When a cap is reached the stage stops, the run is recorded as `budget_exceeded`, and a
-`budget.exceeded` notification is sent. Calls that fail, are refused or are cut off still count
+`budget.exceeded` notification is sent. An execution that would start with the day's budget
+already spent is refused and its task returns to review; a coding agent that reaches a cap
+mid-run stops there. Calls that fail, are refused or are cut off still count
 against the caps. Before each model call Opsmith reserves the worst case (the prompt plus the
 full output allowance), so set `max_tokens_per_run` comfortably above the stage's `max_tokens`.
 

@@ -86,7 +86,8 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | Invented ids and evidence are discarded | The orchestrator checks every reference against the run's input | `test_untrusted_model_output_is_contained` |
 | Only allowed providers receive data | Process allowlist intersected with the project's, for every provider | `test_provider_allowlist_is_enforced`, `test_openai_provider_is_subject_to_the_allowlists` |
 | Project configuration cannot redirect model calls | Model endpoints and their keys are operator settings; a project chooses only a provider name and a model | `test_settings_and_default_gateway` |
-| Spending is capped, and failed calls still count | `BudgetGuard`; usage is recorded for failed, refused and truncated calls | `test_budgets_per_run_and_per_day` and the usage tests in `tests/test_llm.py` |
+| Spending is capped for every stage, and failed calls still count | `BudgetGuard`; usage is recorded for failed, refused and truncated calls. The coding agent writes to the same ledger, does not start when the day's budget is spent, and stops at the per-run cap or what is left of the day | `test_budgets_per_run_and_per_day`, `test_coding_agent_spending_is_recorded_and_counts_toward_the_daily_budget`, `test_an_exhausted_daily_budget_stops_the_execution_before_any_model_call`, `test_the_agent_may_only_spend_what_is_left_of_the_day`, `test_coding_agent_stops_when_the_cost_budget_is_spent` |
+| The guarantees do not depend on the model provider | Every provider goes through the same gateway, and every coding agent through the same tool dispatcher and workspace | `test_acceptance_scenario_through_an_openai_compatible_endpoint`, `test_the_scenario_ends_the_same_whichever_provider_runs_it` |
 
 ### Access control
 

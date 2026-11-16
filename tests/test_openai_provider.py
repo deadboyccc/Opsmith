@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from opsmith.config import Settings
 from opsmith.executor.agents import AgentBudget, AgentTask, OpenAICodingAgent
@@ -562,3 +563,54 @@ def test_coding_agent_keeps_what_it_spent_when_the_endpoint_fails(tmp_path: Path
     assert "HTTP 503" in result.summary
     assert (result.input_tokens, result.output_tokens) == (100, 20)  # the first turn was billed
     assert result.cost_usd > 0
+
+
+@live
+def test_live_endpoint_pipeline_stage_through_the_gateway(platform, seed) -> None:
+    """A real pipeline stage (task drafting) end to end: redaction, the versioned prompt, the
+    live endpoint, schema validation, usage accounting at the configured price."""
+    from opsmith.schemas import TaskDraft  # noqa: PLC0415
+
+    platform.gateway.providers["openai"] = OpenAICompatibleProvider(ChatClient(LIVE_URL))
+    stage = {
+        "provider": "openai",
+        "model": LIVE_MODEL,
+        "max_tokens": 1024,
+        "input_price_per_mtok": 0,
+        "output_price_per_mtok": 0,
+    }
+    variables = {
+        "category": "performance",
+        "paths": ["app/payments.py"],
+        "signals": ["log:timeout"],
+        "findings": [
+            {
+                "source": "audit:python-ast",
+                "title": "HTTP call without timeout",
+                "description": "httpx.post(url) at app/payments.py:10 has no timeout; 80 "
+                "upstream timeout errors were logged. password=hunter2hunter2",
+                "category": "performance",
+                "severity": "medium",
+                "path": "app/payments.py",
+                "line": 10,
+            }
+        ],
+    }
+    with platform.db.session() as s:
+        project = s.get(Project, seed.project.id)
+        project.settings = {**project.settings, "llm": {"default": stage}}
+        result = platform.gateway.structured(
+            s,
+            project=project,
+            stage="task",
+            prompt_id="task.draft",
+            variables=variables,
+            schema=TaskDraft,
+        )
+        assert result.provider == "openai"
+        assert result.output.title
+        assert result.output.acceptance_criteria
+        assert result.input_tokens > 0
+        assert result.cost_usd == 0  # priced at zero, as configured for a local model
+        [usage] = s.scalars(select(UsageRecord)).all()
+        assert (usage.provider, usage.stage) == ("openai", "task")

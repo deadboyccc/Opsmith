@@ -7,6 +7,7 @@ come with.
 - [What is where](#what-is-where)
 - [Writing a test](#writing-a-test)
 - [Continuous integration](#continuous-integration)
+- [Keeping the docs true](#keeping-the-docs-true)
 - [Regenerating the UI screenshots](#regenerating-the-ui-screenshots)
 
 ## Running the tests
@@ -87,6 +88,23 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 | `lint, types, tests` | ruff, format check, mypy, the suite with coverage. Docker is available, so the container tests run |
 | `full suite on PostgreSQL` | The whole suite with `OPSMITH_TEST_DATABASE_URL` set |
 | `container image and compose files` | Builds both images, runs the suite inside the dev image, and checks that Compose refuses an empty database password |
+
+`.github/workflows/live-models.yml` is separate, because it is slow: it starts Ollama with a
+small open model and runs the live tests against it (structured output, a pipeline stage
+through the gateway, the tool-calling agent loop). It runs once a week and on demand
+(*Actions → Live models → Run workflow*, where you can pick the model). It needs no secrets.
+
+## Keeping the docs true
+
+```bash
+make docs        # or: uv run python scripts/check_docs.py
+```
+
+The check fails when a relative link or heading anchor is broken, when the security pages cite
+a test that does not exist, or when the code offers something the docs do not mention: an
+environment variable, a project setting, an API endpoint, a notification event, a connector
+type, an analyzer, a task or lead state, a model provider, a coding agent, a CLI command or a
+job kind. So adding a setting or an endpoint without documenting it breaks the build.
 
 ## Regenerating the UI screenshots
 

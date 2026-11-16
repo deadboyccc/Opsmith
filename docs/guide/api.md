@@ -155,7 +155,7 @@ curl -s -X POST $OPSMITH/api/v1/connectors/$CONNECTOR_ID/push \
 
 | Metric field | Required | Notes |
 |---|---|---|
-| `timestamp`, `service`, `name`, `value` | yes | `value` must be a finite number |
+| `timestamp`, `service`, `name`, `value` | yes | A value that is not a finite number (`NaN`, `Infinity`) is dropped and counted |
 | `environment`, `labels` | no | |
 
 Records are redacted before they are stored. A disabled connector refuses pushes.
