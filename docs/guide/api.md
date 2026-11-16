@@ -156,10 +156,13 @@ curl -s -X POST $OPSMITH/api/v1/connectors/$CONNECTOR_ID/push \
 
 | Metric field | Required | Notes |
 |---|---|---|
-| `timestamp`, `service`, `name`, `value` | yes | A value that is not a finite number (`NaN`, `Infinity`) is dropped and counted |
+| `timestamp`, `service`, `name`, `value` | yes | A value that is not a finite number (`NaN`, `Infinity`), or is beyond 1e150, is dropped and counted |
 | `environment`, `labels` | no | |
 
-Records are redacted before they are stored. A disabled connector refuses pushes.
+Records are redacted before they are stored. A disabled connector refuses pushes. A
+timestamp within a day of year 1 or year 9999 is refused with `422`. A record whose service
+or environment name cannot be stored (too long, or holding a NUL) is left out of the batch;
+the response's `records` says how many were stored.
 
 ## Reviewing a task
 

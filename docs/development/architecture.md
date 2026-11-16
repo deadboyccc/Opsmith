@@ -117,6 +117,14 @@ Implementation notes:
   `queue.PermanentFailure` when retrying cannot help.
 - `Worker._execute` runs the handler with a heartbeat thread that renews the lease. Long work
   (clones, agents, checks) runs outside database transactions; see `ExecutionService`.
+- Work that must not overlap is serialized where the shared thing lives. One aggregation per
+  project and one analysis per service take a row lock (`db.SERIALIZE`: `FOR NO KEY UPDATE`
+  on PostgreSQL, which excludes another holder but not the inserts that reference the row).
+  One audit per repository takes an advisory file lock next to the repository's checkout,
+  because the shared thing there is a directory; a second audit is deferred.
+- The API commits a request's transaction when its handler returns, before the response is
+  sent (`deps.SessionDep` is a function-scoped dependency), so a failed commit is never
+  answered with a 2xx.
 - State changes go through `audit_log.transition_task` / `transition_lead`, which enforce the
   state machines and write the audit trail. A flush guard makes finished `InferenceRun` and
   `AuditRun` rows immutable.

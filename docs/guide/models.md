@@ -151,7 +151,16 @@ something, Opsmith needs to know what a model costs:
   never bypassed by an unpriced model. A local model therefore appears to cost money until you
   set its prices to 0.
 
-Calls that fail, are refused or are cut off are still recorded and counted.
+Calls that fail, are refused or are cut off are still recorded and counted. A reply from an
+OpenAI-compatible endpoint that reports no token usage is counted by estimate (about four
+characters to a token) instead of as free. Input that Claude reads from or writes to its
+prompt cache counts as input.
+
+An OpenAI-compatible endpoint that answers 429, 500, 502, 503 or 504, or refuses the
+connection, is asked twice more (after 1 and 2 seconds, or after its `Retry-After`) before
+the call fails. A failure of any provider reaches the stages the same way: the run is
+recorded as `failed` with what it had already spent, and task drafting falls back to the
+built-in rules.
 
 ## What a model needs to be able to do
 

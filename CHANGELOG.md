@@ -4,6 +4,132 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.2.1 - 2026-11-17
+
+A bug-fix release. The whole code base was read for defects; each fix below has a test that
+failed before it. No database change.
+
+### Upgrade notes
+
+- **Some settings are now limited to the size of the column they are stored in**:
+  `audit_cron` and a schedule's `cron` to 100 characters, `executor_agent` and a stage's
+  `provider` to 50, a stage's `model` to 100. PostgreSQL already refused longer values, later
+  and with a server error. A project whose stored settings exceed a limit (possible on SQLite
+  only) must be corrected, through `opsmith apply` or `PATCH /projects/{id}/settings`.
+- **`OPSMITH_LOG_LEVEL` must be a level name** (`DEBUG`, `INFO`, `WARNING`, `ERROR`,
+  `CRITICAL`, in either case). Anything else now stops the process at start with a
+  configuration message instead of a traceback.
+- **FastAPI 0.121 or newer is required** (the lock file has 0.163).
+- A connector created without `interval_seconds` now takes the project's
+  `ingest_interval_seconds` instead of 900. With the default settings nothing changes.
+
+### Added
+
+- `service_environment` on a connector in `opsmith.toml`, to link it to a service that
+  exists in more than one environment.
+- `environment` in the `config` of the `prometheus` and `loki` connectors.
+
+### Fixed
+
+Execution and review:
+
+- **With the real Claude SDK, every turn of the Claude coding agent failed before a request
+  was sent.** The SDK refuses a non-streaming call above about 21,000 `max_tokens` unless the
+  caller sets the timeout itself, and the agent's default is 32,000. A stage configured above
+  that limit failed the same way. The timeout is now passed explicitly. The tests used a
+  hand-written client, which is why this was not seen; one now runs the real SDK.
+- **A tool call cut off by `max_tokens` broke the Claude agent's conversation.** The
+  half-written `tool_use` block was answered with "Continue.", which the API rejects because
+  the block has no `tool_result`. It is now answered as an error, and never run. A tool input
+  that is not an object crashed the loop and lost the record of what the run had spent.
+- **An agent edit rewrote every line ending of a CRLF file**, so a one-line fix became a diff
+  of the whole file, and the credential scan then treated every old line as newly added.
+  Edits now keep the file's line endings.
+- **A work directory that could not be created left the task in `executing` for good.** It now
+  fails the attempt, and the task returns to review with a report.
+- **The `execution.serialized` audit entry was never stored**: it was written in the
+  transaction that the deferral then rolled back.
+- **A list or object as the value of an edited field was a server error** (`priority`,
+  `effort_estimate`). A review's `reason_code` was only checked for rejections; any other
+  decision stored it unchecked, which PostgreSQL refuses above 50 characters.
+- **A plain Approve in the UI was recorded as an approval with edits** when the task's title
+  held a line break, and the title was rewritten.
+
+Jobs and notifications:
+
+- **A dead job only notified its project for three of the nine job kinds.** The others
+  (ingest, analysis, audit, execute, verify) carry no project id, so their `job.dead`
+  notification was logged and never reached the project's webhook.
+- **A job dead-lettered for being deferred too often kept its lease.**
+- **Two audits of one repository could run on the same checkout** (a manual trigger during a
+  scheduled run), the second resetting the tree under the first. The second now waits.
+- **The per-project and per-service locks blocked everything that references the locked
+  row** on PostgreSQL. While a model drafted tasks, nothing could be ingested, analysed or
+  reviewed in that project, and a review that opens a lead could deadlock with the
+  aggregation. The locks no longer block inserts.
+
+Ingestion. One record that an earlier stage accepted and a later one could not process used
+to stop a connector, or a service's bundles, for good: every retry and every later job met
+it again.
+
+- A message holding half a surrogate pair or a NUL; a `file:line` reference with thousands
+  of digits; a severity such as `²` (a digit to Python, not a number); a service or
+  environment name with a NUL; two metric points of 1e308; `lag_seconds` or
+  `baseline_seconds` too large for a duration. Each is now cleaned, or dropped and counted in
+  `skipped_records`.
+- **A pushed timestamp at the edge of the calendar was a server error** (which log shippers
+  retry forever). It is a `422`.
+- **About one in two hundred quoted epoch-millisecond timestamps was read as a date in the
+  year 17xx** and the record lost without being counted: Python reads `1795011232359` as the
+  ISO basic format.
+- **A connector linked to a service passed on only the service's name**, so records without
+  an environment went to a new `production` service of that name. The Prometheus connector
+  could not produce metrics for any other environment at all.
+- **`ingest_interval_seconds` had no effect**: every connector was created with 900 seconds
+  of its own.
+- **A few error lines with very long file paths removed every log template from a bundle.**
+- Each connector run opened an HTTP client and never closed it. A connector registered
+  through an entry point had no `type_name`, so its error messages raised `AttributeError`.
+
+Models:
+
+- **An SDK's own exception (rate limit, overload, connection) passed the stages that handle
+  model errors.** The job was rolled back together with the usage of the calls already
+  billed, and task drafting's fallback never ran. Every provider failure now reaches the
+  stages as a model error.
+- **The built-in rules' own output could fail validation**: a metric series with a few labels
+  made a title longer than 300 characters, the bundle stayed unconsumed, and every later
+  analysis of that service failed on it.
+- **A NUL in model output failed the run on PostgreSQL**, after the call had been billed.
+- **One 429 or 5xx from an OpenAI-compatible endpoint failed the call at once**, which for
+  analysis is the whole slot. The client now tries twice more.
+- **A reply without token usage was recorded as free**, so the budgets never saw it. Content
+  given as a list of parts was read as the text of a Python list.
+- Input that Claude reads from or writes to its prompt cache was not counted (no request
+  uses the cache yet, so nothing was mis-billed).
+
+Audits and source control:
+
+- **A file name that is not UTF-8 made its repository impossible to audit.** The audit failed
+  after every analyzer had run, on every attempt.
+- **Line numbers were wrong in a file that contains a form feed** (or a Unicode line
+  separator): findings pointed at the wrong line, carried another line's snippet, and the
+  built-in fixes could not find their line.
+- **GitHub CI status read only the first page of check runs**, so a commit whose failing or
+  unfinished run was listed after the first 30 was reported as passing.
+
+API, UI and command line:
+
+- **A write was acknowledged before it was committed.** A commit that failed (a dropped
+  connection, a constraint) still answered `201` with the id of a row that was never stored.
+- **`/docs` was blank**: the strict Content-Security-Policy blocked the assets it loads.
+  `/docs` and `/redoc` now get a policy that lets them; every other path keeps the strict one.
+- **`opsmith apply` checked far less than the API.** A value of the wrong type ended in a
+  traceback or was stored as it was; services were looked up by name alone, so with one name
+  in two environments every connector was linked to the last one in the file.
+- An id containing a NUL was a server error on PostgreSQL instead of `404`. Deeply nested
+  settings JSON in the UI was a server error.
+
 ## 1.2.0 - 2026-11-16
 
 ### Security

@@ -78,7 +78,7 @@ inference_interval_hours = 6        # how often each service is analyzed
 lead_max_carry = 3                  # runs a lead may stay undecided before it is escalated
 audit_cron = "0 2 * * *"            # when repositories are audited (UTC)
 audit_full_every_days = 7           # a full audit at least this often; changed files only in between
-ingest_interval_seconds = 900       # default connector interval
+ingest_interval_seconds = 900       # for connectors that set no interval_seconds of their own
 pr_poll_seconds = 600               # how often open pull requests are checked
 recently_closed_days = 14           # suppress findings for a problem fixed this recently
 min_task_confidence = 0.3           # findings below this do not become tasks
@@ -165,7 +165,8 @@ A connector is a source of signals. Each belongs to a project and usually to a s
 name = "loki"
 type = "loki"                         # loki | prometheus | file_logs | file_metrics | push_logs | push_metrics
 service = "payments-api"              # default service for records that do not name one
-interval_seconds = 900                # at least 60
+service_environment = "production"    # which "payments-api", when it exists in several environments
+interval_seconds = 900                # at least 60; left out, the project's ingest_interval_seconds
 credentials_ref = "env:LOKI_TOKEN"    # optional; sent as a Bearer token
 enabled = true
 config = { url = "http://loki:3100", query = '{service_name="payments-api"}' }
@@ -177,8 +178,14 @@ Common behaviour of the pull connectors:
   (`lag_seconds` in `config`), so records that arrive slightly late are not skipped.
 - After an outage a run catches up at most 24 hours at a time and continues on the next run.
 - A record that cannot be parsed is skipped and counted in the job result. It does not stop
-  the rest.
-- Very long messages are truncated to 16 KiB and marked as truncated.
+  the rest. The same goes for a record that cannot be stored: a service or environment name
+  that is too long or holds a NUL, a metric value that is not finite or is beyond 1e150, or
+  attributes nested more than 255 levels deep.
+- Very long messages are truncated to 16 KiB and marked as truncated. A NUL or half a
+  surrogate pair in a text is replaced by U+FFFD.
+- A record without an environment gets the connector's `environment` (in `config`). When
+  that is not set and the connector is linked to a service, it gets that service's.
+- The connector's HTTP client is closed after every run.
 
 ### `loki`
 
@@ -188,6 +195,7 @@ Common behaviour of the pull connectors:
 | `query` | required | LogQL selector |
 | `limit` | 5000 | Entries per page. Results are paged, up to 20 pages per run; a window with more than that is continued on the next run rather than cut off |
 | `service_label` | `service_name` | The stream label that names the service |
+| `environment` | the linked service's, else `production` | Environment for streams without an `env` or `environment` label |
 | `timeout` | 30 | Seconds, at most 120 |
 | `lag_seconds` | 60 | See above |
 
@@ -200,8 +208,9 @@ A line that is JSON is read for its level, message and other fields.
 | `url` | required | Base URL of Prometheus |
 | `queries` | required | A list of `{ name = "...", promql = "..." }`. `name` becomes the metric name |
 | `step` | `60s` | Query resolution |
-| `baseline_seconds` | 21600 | How far back to read for the baseline each run |
+| `baseline_seconds` | 21600 | How far back to read for the baseline each run, at most 30 days |
 | `service_label` | `service` | The label that names the service |
+| `environment` | the linked service's, else `production` | Environment of the metrics this connector reads |
 | `timeout`, `lag_seconds` | 30, 60 | As above |
 
 Name metrics so that the direction is clear. Names containing words like `error`, `latency` or
@@ -219,8 +228,8 @@ Read files on the worker. For development, tests and simple setups. The path mus
 | `format` (logs) | `jsonl` | `jsonl`, or `text` for plain lines |
 | `timestamp_field`, `message_field`, `severity_field`, `service_field` (logs, jsonl) | `timestamp`, `message`, `level`, `service` | Field names in your JSON |
 | `pattern` (logs, text) | `timestamp LEVEL [service] message` | A regular expression with named groups. `timestamp` is required; `severity`, `service` and `message` are optional |
-| `environment` | `production` | Environment for records that do not carry one |
-| `baseline_seconds` (metrics) | 21600 | Look-back for the baseline |
+| `environment` | the linked service's, else `production` | Environment for records that do not carry one |
+| `baseline_seconds` (metrics) | 21600 | Look-back for the baseline, at most 30 days |
 
 Metric files are JSON lines with `timestamp`, `name`, `value` and optionally `service` and
 `labels`. A record without a timestamp is skipped and counted.

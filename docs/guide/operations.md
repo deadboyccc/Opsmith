@@ -35,6 +35,11 @@ Every stage is a queued job.
   again after `OPSMITH_WORKER_LEASE_SECONDS`.
 - Stop a worker with `SIGTERM`. It finishes the job it is running first.
 - More than one scheduler is safe: a schedule slot is enqueued once however many ask.
+- A repository is audited by one job at a time. An audit that starts while another one of
+  the same repository is running is deferred by a minute (`another audit of this repository
+  is running`), because both would use the same checkout.
+- A `job.dead` notification goes to the channels of the project the job worked for, whatever
+  the job's kind.
 
 Things worth an alert:
 
