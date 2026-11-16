@@ -823,6 +823,15 @@ def test_tenant_credential_references_cannot_reach_platform_secrets(
     ):
         with pytest.raises(CredentialRefError):
             resolve_tenant_credential(ref)
+    # Docker secrets keep the LLM key next to tenants' tokens: that file stays reserved,
+    # also through a link to it.
+    (secrets_dir / "anthropic_key").write_text("sk-ant-platform\n")
+    (secrets_dir / "innocent").symlink_to(secrets_dir / "anthropic_key")
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_API_KEY_REF", f"file:{secrets_dir / 'anthropic_key'}")
+    for ref in (f"file:{secrets_dir / 'anthropic_key'}", f"file:{secrets_dir / 'innocent'}"):
+        with pytest.raises(CredentialRefError, match="reserved"):
+            resolve_tenant_credential(ref)
+    assert resolve_tenant_credential(f"file:{secrets_dir / 'token'}") == "s3cret"
     # The operator can move the LLM key; whatever variable holds it stays reserved.
     monkeypatch.setenv("OPSMITH_ANTHROPIC_API_KEY_REF", "env:MY_LLM_KEY")
     with pytest.raises(CredentialRefError):

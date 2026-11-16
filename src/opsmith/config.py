@@ -133,17 +133,40 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _RESERVED_ENV = frozenset({"POSTGRES_PASSWORD", "PGPASSWORD", "DATABASE_URL"})
 
 
+_PROVIDER_KEY_REFS = (
+    ("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY"),
+    ("OPENAI_API_KEY_REF", "env:OPENAI_API_KEY"),
+)
+
+
 def _reserved_env_names() -> frozenset[str]:
     """The model providers' API keys, wherever the operator has pointed them."""
     names = set(_RESERVED_ENV)
-    for setting, default in (
-        ("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY"),
-        ("OPENAI_API_KEY_REF", "env:OPENAI_API_KEY"),
-    ):
+    for setting, default in _PROVIDER_KEY_REFS:
         scheme, _, name = _env(setting, default).partition(":")
         if scheme == "env":
             names.add(name)
     return frozenset(names)
+
+
+def _is_reserved_file(path: Path) -> bool:
+    """Whether ``path`` is a file that holds one of the model providers' API keys.
+
+    Docker secrets put those keys in the same directory as tenants' tokens, so a reference
+    inside the secrets directory is not enough to tell them apart."""
+    for setting, default in _PROVIDER_KEY_REFS:
+        scheme, _, value = _env(setting, default).partition(":")
+        if scheme != "file":
+            continue
+        key_file = Path(value).resolve()
+        if path == key_file:
+            return True
+        try:
+            if path.exists() and key_file.exists() and path.samefile(key_file):
+                return True
+        except OSError:
+            return True  # cannot tell them apart: refuse
+    return False
 
 
 def secrets_dir() -> Path:
@@ -156,7 +179,8 @@ def check_credentials_ref(ref: str | None) -> None:
     * ``env:NAME`` may not name the platform's own secrets (``OPSMITH_*``, the database
       password, the LLM API key).
     * ``file:/path`` must live inside ``OPSMITH_SECRETS_DIR`` (default ``/run/secrets``), so a
-      reference cannot be used to read arbitrary files on the worker.
+      reference cannot be used to read arbitrary files on the worker, and may not be the file
+      that holds an LLM API key.
     """
     if not ref:
         return
@@ -168,8 +192,11 @@ def check_credentials_ref(ref: str | None) -> None:
             raise CredentialRefError(f"{ref!r} names a variable reserved for the platform")
     elif scheme == "file":
         root = secrets_dir().resolve()
-        if not Path(value).resolve().is_relative_to(root):
+        path = Path(value).resolve()
+        if not path.is_relative_to(root):
             raise CredentialRefError(f"{ref!r} is outside the secrets directory {str(root)!r}")
+        if _is_reserved_file(path):
+            raise CredentialRefError(f"{ref!r} names a file reserved for the platform")
     else:
         raise CredentialRefError(
             f"unsupported credentials reference {ref!r}; use env:NAME or file:/path"

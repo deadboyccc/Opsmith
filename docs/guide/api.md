@@ -28,7 +28,8 @@ opsmith create-user --tenant acme --name "Riley" --role reviewer
 opsmith create-user --tenant acme --name "collector" --role service
 ```
 
-The UI signs in with the same key and keeps it in an HttpOnly, SameSite=Strict cookie.
+The UI signs in with the same key and keeps it in an HttpOnly, SameSite=Strict cookie. The API
+accepts that cookie for `GET` requests only; anything that changes state needs the key in a header.
 
 ## Roles
 

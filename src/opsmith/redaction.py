@@ -250,13 +250,18 @@ class Redactor:
         Integers that are card numbers are masked too.
         """
         counts = counts if counts is not None else Counter()
+        sensitive = key is not None and _SENSITIVE_FIELD.search(key) is not None
         if isinstance(value, dict):
-            return {k: self.redact(v, counts, key=str(k)) for k, v in value.items()}
+            # Everything under a credential-named key is masked, at any depth:
+            # {"password": {"new": "..."}} must not escape because "new" is harmless.
+            return {
+                k: self.redact(v, counts, key=key if sensitive else str(k))
+                for k, v in value.items()
+            }
         if isinstance(value, (list, tuple)):
             return [self.redact(v, counts, key=key) for v in value]
         if isinstance(value, bool) or value is None:
             return value
-        sensitive = key is not None and _SENSITIVE_FIELD.search(key) is not None
         if sensitive and isinstance(value, (str, int, float)):
             if value == "" or (isinstance(value, str) and _REDACTED_ONLY.fullmatch(value)):
                 return value

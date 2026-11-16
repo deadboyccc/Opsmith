@@ -31,7 +31,14 @@ def api_key_from(request: Request) -> str | None:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    return request.headers.get("x-opsmith-key") or request.cookies.get(COOKIE)
+    header = request.headers.get("x-opsmith-key")
+    if header:
+        return header
+    # The UI's cookie is accepted for reading the API in a browser. A call that changes
+    # something must carry the key in a header, which a cross-site form cannot set.
+    if request.method in {"GET", "HEAD"}:
+        return request.cookies.get(COOKIE)
+    return None
 
 
 def get_principal(request: Request, session: SessionDep) -> Any:

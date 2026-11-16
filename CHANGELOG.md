@@ -15,6 +15,14 @@ the database schema says so under *Upgrade notes*.
   execution before the platform runs git on it, and the agent cannot write one.
 - **A `-diff` or `binary` git attribute hid a file from the credential scan.** The staged diff
   is now read as text.
+- **A tenant could send the platform's model API key to its own URL** when the operator stored
+  that key as a file in the secrets directory (Docker secrets): a connector's
+  `credentials_ref` could name the same file. That file, and links to it, are now reserved.
+- **The API accepted the UI's session cookie for state-changing calls** without the UI's
+  `Origin` check, so a form on a sibling subdomain could, for example, resubmit a task. The
+  cookie now works for reads only; changes need the key in a header.
+- **Values nested under a credential-named field were stored unredacted**, for example
+  `{"password": {"new": "..."}}`. Everything under such a field is now masked.
 - **Files whose name starts with `.opsmith-home` skipped the protected-path gate**, and a
   sandbox home replaced by a link or file could be committed. The home is now matched by exact
   path and always removed before the gates.

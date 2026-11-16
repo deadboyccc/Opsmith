@@ -178,6 +178,20 @@ def test_structured_fields_named_like_credentials() -> None:
     assert redactor.redact("hunter22hunter") == "hunter22hunter"
 
 
+def test_everything_under_a_credential_named_field_is_masked() -> None:
+    token = "[REDACTED:credential_assignment]"
+    out = Redactor().redact(
+        {
+            "password": {"old": "hunter2xx", "new": "Tr0ub4dor&3"},
+            "authorization": {"scheme": "Basic", "credentials": ["dXNlcjpwYXNz"]},
+            "request": {"headers": {"cookie": {"sid": "abc123"}}, "path": "/pay"},
+        }
+    )
+    assert out["password"] == {"old": token, "new": token}
+    assert out["authorization"] == {"scheme": token, "credentials": [token]}
+    assert out["request"] == {"headers": {"cookie": {"sid": token}}, "path": "/pay"}
+
+
 def test_builtin_patterns_stay_linear_on_long_runs() -> None:
     # Each of these took seconds to minutes per 40 kB with the unpinned patterns (time grew
     # with the square of the length). No timing assertion: a regression shows as a hang.

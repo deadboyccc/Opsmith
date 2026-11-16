@@ -225,6 +225,23 @@ def test_form_posts_from_another_origin_are_rejected(client, platform, seed, ori
     assert client.get("/ui", follow_redirects=False).status_code == 200  # still signed in
 
 
+def test_the_api_takes_the_ui_cookie_for_reading_only(client, platform, seed) -> None:
+    """A cross-site form can make the browser send the cookie, but cannot set a header."""
+    task_id = make_task(platform, seed, status="deferred")
+    login(client, seed)
+    assert client.get(f"/api/v1/tasks/{task_id}").status_code == 200
+    resp = client.post(
+        f"/api/v1/tasks/{task_id}/resubmit", headers={"origin": "https://evil.example"}
+    )
+    assert resp.status_code == 401
+    with platform.db.session() as s:
+        assert s.get(Task, task_id).status == "deferred"
+    resp = client.post(
+        f"/api/v1/tasks/{task_id}/resubmit", headers={"X-Opsmith-Key": seed.keys["reviewer"]}
+    )
+    assert resp.status_code == 200
+
+
 def test_logout_is_a_post_form(client, seed) -> None:
     login(client, seed)
     page = client.get("/ui").text
