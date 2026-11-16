@@ -26,7 +26,7 @@ from opsmith.llm.anthropic_provider import (
 from opsmith.llm.pricing import PRICES, cost_usd
 from opsmith.llm.prompts import get_prompt
 from opsmith.models import Project, UsageRecord
-from opsmith.schemas import ProjectSettings
+from opsmith.schemas import InferenceOutput, ProjectSettings, TaskDraft, TriageOutput
 from tests.conftest import FAKE_AWS_KEY
 
 
@@ -472,3 +472,44 @@ def test_anthropic_provider_accepts_a_large_output_allowance(max_tokens) -> None
     assert provider.complete(request).input_tokens == 100
     assert json.loads(sent[0].content)["max_tokens"] == max_tokens
     assert request_timeout(max_tokens) >= 600
+
+
+@pytest.mark.parametrize(
+    ("schema", "reply"),
+    [
+        (
+            InferenceOutput,
+            {"summary": "s\x00", "new_leads": [{"title": "t\x00", "hypothesis": "h"}]},
+        ),
+        (
+            TriageOutput,
+            {"decisions": [{"index": 0, "keep": True, "confidence": 1, "rationale": "\x00"}]},
+        ),
+        (
+            TaskDraft,
+            {
+                "title": "half \ud83d emoji",
+                "problem_statement": "p\x00",
+                "proposed_approach": "a",
+                "acceptance_criteria": ["c\x00"],
+                "risk_assessment": "r",
+                "effort_estimate": "S",
+            },
+        ),
+    ],
+)
+def test_model_output_is_made_storable(schema, reply) -> None:
+    """A model can copy a NUL or half a surrogate pair from a log line into its answer.
+    PostgreSQL refuses both in text, which failed the run after the call had been billed."""
+    as_json = json.dumps(reply)
+    parsed = [schema.model_validate(reply)]  # what a provider that returns objects hands over
+    if "\\ud83d" in as_json:
+        # pydantic's JSON parser refuses a lone surrogate escape; the gateway then asks again.
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            schema.model_validate_json(as_json)
+    else:
+        parsed.append(schema.model_validate_json(as_json))
+    for output in parsed:
+        dumped = json.dumps(output.model_dump(mode="json"))
+        assert "\\u0000" not in dumped
+        assert "\\ud83d" not in dumped

@@ -293,6 +293,19 @@ def _bounded_path(value: Any) -> Any:
     return None if isinstance(value, str) and len(value) > MAX_PATH_CHARS else value
 
 
+class StageOutput(BaseModel):
+    """Base of what a model stage returns. The whole reply is passed through ``clean_value``
+    before validation: a model can copy a NUL or half a surrogate pair out of a log line, and
+    neither can be stored as text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _storable(cls, data: Any) -> Any:
+        return clean_value(data)
+
+
 class EvidenceRefModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ref: str
@@ -346,9 +359,7 @@ class NewLead(BaseModel):
     _path = field_validator("suspected_path", mode="before")(_bounded_path)
 
 
-class InferenceOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class InferenceOutput(StageOutput):
     summary: str = ""
     findings: list[InferenceFinding] = Field(default_factory=list)
     lead_updates: list[LeadUpdate] = Field(default_factory=list)
@@ -365,14 +376,11 @@ class TriageDecision(BaseModel):
     severity: Severity | None = None
 
 
-class TriageOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class TriageOutput(StageOutput):
     decisions: list[TriageDecision] = Field(default_factory=list)
 
 
-class TaskDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class TaskDraft(StageOutput):
     title: str = Field(max_length=300)
     problem_statement: str
     proposed_approach: str
