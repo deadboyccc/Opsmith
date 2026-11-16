@@ -267,6 +267,12 @@ AGENT_SYSTEM = (
 )
 
 
+TRUNCATED_CALL = (
+    "This tool call was cut off by the output limit before its input was complete, so it "
+    "was not run. Send it again; for a large file, make several smaller edits instead."
+)
+
+
 class ClaudeCodingAgent:
     name = "claude"
     provider = "anthropic"
@@ -322,10 +328,27 @@ class ClaudeCodingAgent:
             messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "pause_turn":
                 continue
-            if resp.stop_reason == "max_tokens":
-                messages.append({"role": "user", "content": "Continue."})
-                continue
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
+            if resp.stop_reason == "max_tokens":
+                # The output limit can cut a tool call off part-way. Its input is then
+                # incomplete, so it is never run; but every tool_use block must be answered,
+                # or the API rejects the next request.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tu.id,
+                                "content": TRUNCATED_CALL,
+                                "is_error": True,
+                            }
+                            for tu in tool_uses
+                        ]
+                        or "Continue.",
+                    }
+                )
+                continue
             if not tool_uses:
                 messages.append(
                     {
@@ -343,7 +366,7 @@ class ClaudeCodingAgent:
                         "step": "tool",
                         "turn": turn,
                         "tool": tu.name,
-                        "path": (tu.input or {}).get("path"),
+                        "path": tu.input.get("path") if isinstance(tu.input, dict) else None,
                         "error": is_error,
                     }
                 )

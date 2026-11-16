@@ -392,3 +392,68 @@ def test_codemod_on_a_crlf_file_changes_one_line(tmp_path: Path) -> None:
     assert (tmp_path / "app.py").read_bytes() == (
         b"import yaml\r\n\r\ncfg = yaml.safe_load(fh)\r\nz = 1\r\n"
     )
+
+
+class TruncatingClaude:
+    """First reply is cut off by ``max_tokens`` in the middle of a tool call."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.messages = self
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
+        usage = SimpleNamespace(input_tokens=10, output_tokens=10)
+        if len(self.calls) == 1:
+            cut = SimpleNamespace(
+                type="tool_use", id="cut", name="write_file", input={"path": "app.py"}
+            )
+            return SimpleNamespace(stop_reason="max_tokens", content=[cut], usage=usage)
+        done = SimpleNamespace(
+            type="tool_use", id="fin", name="finish", input={"success": False, "summary": "s"}
+        )
+        return SimpleNamespace(stop_reason="tool_use", content=[done], usage=usage)
+
+
+def test_claude_agent_answers_a_tool_call_cut_off_by_max_tokens(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The API rejects a conversation in which a ``tool_use`` block is not followed by its
+    ``tool_result``. A truncated call must be answered (as an error) and never executed."""
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    client = TruncatingClaude()
+    agent = ClaudeCodingAgent(client=client)
+    agent.run(
+        AgentTask("t", "x", "fix", "p", "a", ["c"], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(max_iterations=2),
+    )
+    assert (tmp_path / "app.py").read_text() == "x = 1\n"  # the half-written call did not run
+    reply = client.calls[1]["messages"][-1]
+    assert reply["role"] == "user"
+    assert [(b["type"], b["tool_use_id"], b["is_error"]) for b in reply["content"]] == [
+        ("tool_result", "cut", True)
+    ]
+
+
+def test_claude_agent_survives_a_tool_input_that_is_not_an_object(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A malformed tool input used to raise out of the loop, losing the record of what the
+    run had already spent."""
+    monkeypatch.setenv("OPSMITH_ANTHROPIC_FALLBACKS", "off")
+    client = FakeClaude(
+        [
+            [{"name": "read_file", "input": ["app.py"]}],
+            [{"name": "finish", "input": {"success": False, "summary": "gave up"}}],
+        ]
+    )
+    res = ClaudeCodingAgent(client=client).run(
+        AgentTask("t", "x", "fix", "p", "a", ["c"], []),
+        Workspace(LocalSandbox(tmp_path), {}),
+        AgentBudget(max_iterations=2),
+    )
+    assert res.summary == "gave up"
+    assert res.input_tokens == 2000
+    assert client.calls[1]["messages"][-1]["content"][0]["is_error"] is True
