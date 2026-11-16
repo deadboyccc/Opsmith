@@ -24,6 +24,7 @@ SKIP_DIRS = {".git", ".venv", "node_modules", "opsmith-demo", "data", ".pytest_c
 # The original specification and the outside review are kept as they were written.
 SKIP_FILES = {"docs/development/independent-project-review.md"}
 LINK = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|\!\[[^\]]*\]\(([^)\s]+)\)")
+HTML_SRC = re.compile(r"<(?:img|a)\b[^>]*?\b(?:src|href)=\"([^\"]+)\"")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
@@ -218,8 +219,9 @@ def main() -> int:
     for path in files:
         rel = path.relative_to(ROOT)
         for line in strip_code(path.read_text(encoding="utf-8")):
-            for match in LINK.finditer(line):
-                target = match.group(1) or match.group(2)
+            targets = [m.group(1) or m.group(2) for m in LINK.finditer(line)]
+            targets += HTML_SRC.findall(line)  # <img src="..."> and <a href="...">
+            for target in targets:
                 if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):  # http:, mailto:, ...
                     continue
                 file_part, _, anchor = target.partition("#")

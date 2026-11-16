@@ -63,7 +63,7 @@ OPSMITH_DATA_DIR=./opsmith-demo/data uv run opsmith api
 This is what the demo's task looks like once it has gone all the way, with its trail back to
 the raw evidence (all data is synthetic; more pages in the [UI tour](docs/guide/ui-tour.md)):
 
-![A verified task with its provenance chain](docs/images/ui-task-verified.png)
+<img src="docs/images/ui-task-verified.png" alt="A verified task with its problem statement, execution report, provenance chain and audit trail" width="760">
 
 ## How it works
 
