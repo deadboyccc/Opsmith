@@ -153,6 +153,24 @@ def _instant(text: str) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+def _column_length(column: str) -> int:
+    length = getattr(Service.__table__.c[column].type, "length", None)
+    assert isinstance(length, int), f"services.{column} has no length"
+    return length
+
+
+_SERVICE_NAME_LEN = _column_length("name")
+_ENVIRONMENT_LEN = _column_length("environment")
+
+
+def _too_long(service: str, environment: str) -> str | None:
+    """A record whose service or environment does not fit the column cannot be stored; on
+    PostgreSQL it would fail the whole window. Truncating could merge two services."""
+    if len(service) > _SERVICE_NAME_LEN or len(environment) > _ENVIRONMENT_LEN:
+        return "field_too_long"
+    return None
+
+
 def resolve_service(
     session: Session, project: Project, name: str, environment: str = "production"
 ) -> Service:
@@ -340,8 +358,10 @@ class IngestionService:
     ) -> list[RawBatch]:
         """Normalize, bound, redact and store the signals; one ``RawBatch`` per service/kind.
 
-        Records that cannot be used (non-finite metric values) are left out and counted in
-        ``dropped`` by reason.
+        Records that cannot be used are left out and counted in ``dropped`` by reason, so one
+        bad record never stops a connector: non-finite metric values, a service or
+        environment name longer than its column, attributes nested deeper than can be
+        serialized.
         """
         settings = ProjectSettings.model_validate(project.settings)
         redactor = Redactor(settings.redaction_extra_patterns)
@@ -349,9 +369,17 @@ class IngestionService:
         grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
         counts: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
         for ev in logs:
+            too_long = _too_long(ev.service, ev.environment)
+            if too_long:
+                dropped[too_long] += 1
+                continue
             key = (ev.service, ev.environment, "logs")
             c = counts[key]
-            record = ev.model_dump(mode="json")
+            try:
+                record = ev.model_dump(mode="json")
+            except ValueError:  # pydantic stops at 255 levels of nesting
+                dropped["unserializable"] += 1
+                continue
             record["severity"] = normalize_severity(ev.severity)
             record["message"] = redactor.redact(_cap(record["message"]), c)
             record["attributes"] = redactor.redact(_cap(record["attributes"]), c)
@@ -362,6 +390,10 @@ class IngestionService:
         for mp in metrics:
             if not math.isfinite(mp.value):
                 dropped["non_finite_value"] += 1
+                continue
+            too_long = _too_long(mp.service, mp.environment)
+            if too_long:
+                dropped[too_long] += 1
                 continue
             key = (mp.service, mp.environment, "metrics")
             record = mp.model_dump(mode="json")
@@ -376,12 +408,9 @@ class IngestionService:
                 redacted = {**redacted, LABEL_DIGEST: _label_digest(project.id, labels)}
             record["labels"] = redacted
             grouped[key].append(record)
-        if dropped["non_finite_value"]:
-            METRICS.inc(
-                "opsmith_dropped_records_total",
-                dropped["non_finite_value"],
-                reason="non_finite_value",
-            )
+        for reason, count in dropped.items():
+            if count:
+                METRICS.inc("opsmith_dropped_records_total", count, reason=reason)
 
         batches: list[RawBatch] = []
         for (service_name, env, kind), records in grouped.items():

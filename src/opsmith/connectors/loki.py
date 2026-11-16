@@ -156,7 +156,9 @@ def _parse_line(line: str) -> tuple[str, dict[str, Any], str | None]:
         except (json.JSONDecodeError, RecursionError):
             return line, {}, None
         if isinstance(data, dict):
-            message = str(data.pop("message", data.pop("msg", line)))
-            level = data.pop("level", data.pop("severity", None))
+            # The fallback key is only taken when the main one is missing; a line with both
+            # keeps the other in its attributes.
+            message = str(data.pop("message") if "message" in data else data.pop("msg", line))
+            level = data.pop("level") if "level" in data else data.pop("severity", None)
             return message, data, str(level) if level else None
     return line, {}, None

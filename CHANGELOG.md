@@ -49,6 +49,12 @@ the database schema says so under *Upgrade notes*.
 - **Post-merge verification gave up silently** after four hours without data, which with the
   default daily audit left most code-only tasks `merged` for good. It now waits up to 48
   hours and then fails the job (dead, audited, notified) instead of succeeding quietly.
+- **One unstorable record stopped a connector for good.** A record nested more than 255
+  levels deep, or with a service name or environment longer than its column (on PostgreSQL),
+  failed the whole window, which was then retried until the job died, and nothing after it
+  was ingested. Such records are now dropped and counted in the run's `skipped_records`.
+- **Loki JSON lines lost fields.** A line with both `message` and `msg` (or `level` and
+  `severity`) dropped the second one; it is now kept in the attributes.
 - **The Prometheus connector could read past the end of its window.** It rounded the window's
   times to the millisecond, so an end such as `…36.1766` became `…36.177` and Prometheus
   returned a point that also belonged to the next window. Times are now truncated. Found by

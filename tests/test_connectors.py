@@ -148,6 +148,14 @@ def test_prometheus_connector() -> None:
     assert res.metrics[0].name == "latency_p95"
 
 
+def test_loki_json_line_keeps_secondary_message_and_level_fields() -> None:
+    from opsmith.connectors.loki import _parse_line  # noqa: PLC0415
+
+    line = '{"message": "payment failed", "msg": "card declined", "level": "error", "severity": 1}'
+    assert _parse_line(line) == ("payment failed", {"msg": "card declined", "severity": 1}, "error")
+    assert _parse_line('{"msg": "only msg", "severity": "warn"}') == ("only msg", {}, "warn")
+
+
 def test_prometheus_window_is_never_rounded_past_its_end() -> None:
     """Prometheus takes millisecond times. Rounding 59.9996 s up to 60.000 s asked for a step
     after the window, which then appeared in the next window as well."""

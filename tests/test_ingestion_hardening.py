@@ -192,6 +192,35 @@ def test_one_malformed_line_does_not_wedge_the_connector(
         assert (deploy["version"], deploy["trace_id"]) == ("3", "99")
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"environment": "e" * 51},  # longer than services.environment (fails on PostgreSQL)
+        {"service": "s" * 201},  # longer than services.name
+        {"payload": "deep"},  # nested deeper than pydantic serializes
+    ],
+)
+def test_one_unstorable_record_does_not_wedge_the_connector(
+    platform: Platform, seed: Seed, ingestion: IngestionService, bad: dict[str, Any]
+) -> None:
+    if bad.get("payload") == "deep":
+        nested: Any = "x"
+        for _ in range(300):
+            nested = {"a": nested}
+        bad = {"payload": nested}
+    start = _start(seed)
+    write_logs(seed.logs, error_records(start, 3))
+    with seed.logs.open("a") as fh:
+        fh.write(json.dumps(_log(start, 1, "unstorable", **bad)) + "\n")
+    with platform.db.session() as s:
+        result = ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+        assert result["records"] == 3
+        assert result["skipped_records"] == 1  # counted, not silent
+        conn = s.get(Connector, seed.log_connector.id)
+        assert conn is not None
+        assert conn.cursor["last_end"] == (start + timedelta(hours=6)).isoformat()
+
+
 def test_non_finite_metric_values_are_dropped_not_fatal(
     platform: Platform, seed: Seed, ingestion: IngestionService, drain: Any
 ) -> None:
