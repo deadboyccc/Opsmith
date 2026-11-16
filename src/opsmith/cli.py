@@ -45,7 +45,7 @@ def cmd_init(args: argparse.Namespace, settings: Settings) -> int:
             return 1
         tenant = create_tenant(s, args.tenant)
         user, key = create_user(s, tenant, args.admin, "admin", args.email)
-    print(f"database: {settings.resolved_database_url}")
+    print(f"database: {settings.database_display}")
     print(f"tenant:   {tenant.name} ({tenant.id})")
     print(f"admin:    {user.name}")
     print(f"API key:  {key}\n(shown once - store it in your secret manager)")

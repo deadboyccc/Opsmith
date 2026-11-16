@@ -47,6 +47,9 @@ class Settings(BaseModel):
     log_json: bool = True
     bot_name: str = "Opsmith Bot"
     bot_email: str = "opsmith-bot@users.noreply.github.com"
+    # Public URL of the UI (e.g. https://opsmith.example.com). When set, pull requests link
+    # back to their task instead of only naming its id.
+    base_url: str = ""
 
     @property
     def object_store_dir(self) -> Path:
@@ -57,6 +60,13 @@ class Settings(BaseModel):
         if self.database_url:
             return self.database_url
         return f"sqlite:///{(self.data_dir / 'opsmith.db').resolve()}"
+
+    @property
+    def database_display(self) -> str:
+        """The database URL with any password hidden; safe to print or log."""
+        from sqlalchemy.engine import make_url  # noqa: PLC0415 - keep this module import-light
+
+        return make_url(self.resolved_database_url).render_as_string(hide_password=True)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -74,6 +84,7 @@ class Settings(BaseModel):
             log_json=_env("LOG_JSON", "true").lower() in {"1", "true", "yes"},
             bot_name=_env("BOT_NAME", "Opsmith Bot"),
             bot_email=_env("BOT_EMAIL", "opsmith-bot@users.noreply.github.com"),
+            base_url=_env("BASE_URL", ""),
         )
 
     def ensure_dirs(self) -> None:

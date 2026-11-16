@@ -86,7 +86,7 @@ class Platform:
             self.settings,
             self.scm,
             agent_factories or default_agent_factories(self.settings, self.gateway),
-            base_url=base_url,
+            base_url=base_url or self.settings.base_url,
         )
         self.tracker = PRTracker(self.scm)
         self.verifier = Verifier()

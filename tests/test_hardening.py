@@ -36,6 +36,7 @@ from opsmith.executor.service import sandbox_policy_error
 from opsmith.gitutil import run_git, staged_added_lines, worktree_changes
 from opsmith.models import (
     AuditLog,
+    ExecutionRun,
     Finding,
     Job,
     Notification,
@@ -250,9 +251,11 @@ def test_docker_sandbox_really_isolates(tmp_path: Path) -> None:
     tmp_path.chmod(0o777)  # the container user must be able to write the bind mount
     sandbox = DockerSandbox(tmp_path, image)
 
-    net = sandbox.run("ls /sys/class/net; wget -q -T 3 -O- http://1.1.1.1 || echo NO_NETWORK")
-    assert net.output.split()[0] == "lo"
+    assert sandbox.run("ls /sys/class/net").output.split() == ["lo"]  # loopback only
+    net = sandbox.run("wget -q -T 3 -O- http://1.1.1.1 || echo NO_NETWORK")
     assert "NO_NETWORK" in net.output
+    ordered = sandbox.run("echo one; echo two >&2; echo three")
+    assert ordered.output.split() == ["one", "two", "three"]  # stderr stays in order
 
     fs = sandbox.run(
         "touch /escape 2>/dev/null && echo ROOT_WRITABLE; "
@@ -733,3 +736,33 @@ def test_tenant_credential_references_cannot_reach_platform_secrets(
     with pytest.raises(CredentialRefError):
         check_credentials_ref("env:MY_LLM_KEY")
     check_credentials_ref("env:ANTHROPIC_API_KEY")
+
+
+@pytest.mark.docker
+def test_full_execution_through_the_docker_sandbox(platform, seed, drain) -> None:
+    """The real path end to end: agent edit, checks inside a network-less container, gates,
+    commit from the trusted snapshot, PR. Skipped where Docker is unavailable."""
+    image = "python:3.12-slim"
+    if not _docker_ready(image):
+        pytest.skip("docker (or the python image) is not available")
+    platform.settings.sandbox_backend = "docker"
+    platform.settings.sandbox_image = image
+    # The sandbox has no network, so checks can only use what the image already contains.
+    # The demo repository needs httpx, which a bare Python image lacks; compile instead.
+    _set_repo(
+        platform,
+        seed,
+        test_command="python -m py_compile app/payments.py && grep -q 'timeout=10' app/payments.py",
+    )
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    t = task(platform, task_id)
+    assert t.status == "pr_open", t.execution_report
+    with platform.db.session() as s:
+        run = s.scalars(select(ExecutionRun)).one()
+        assert run.sandbox_id.startswith("docker-")
+        assert run.checks[0]["exit_code"] == 0
+    shown = run_git(["show", "--stat", "--format=%an", _pr_branches(seed)], seed.repo_path)
+    assert "Opsmith Bot" in shown
+    assert ".opsmith-home" not in shown

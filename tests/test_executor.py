@@ -212,7 +212,10 @@ def test_docker_sandbox_isolation_flags(tmp_path: Path) -> None:
         f"{tmp_path.resolve()}:/workspace",
     ):
         assert flag in joined
-    assert cmd[-3:] == ["sh", "-c", "pytest -q"]
+    assert cmd[-3:] == ["sh", "-c", "exec 2>&1; pytest -q"]
+    for flag in ("--read-only", "--init", "--memory-swap"):
+        assert flag in cmd
+    assert "/var/run/docker.sock" not in joined
 
 
 def test_codemods() -> None:

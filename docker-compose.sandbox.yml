@@ -1,0 +1,27 @@
+# Optional overlay: lets the worker run approved tasks in the Docker sandbox.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
+#
+# What it does, and what that costs:
+#   * mounts the host's Docker socket into the worker, so the worker can start sandbox
+#     containers (--network none, read-only root, no capabilities, only the checkout mounted).
+#     Access to the socket is equivalent to root on the host. The worker is trusted code, the
+#     sandboxed commands are not, and the socket is never passed into a sandbox - but treat
+#     the worker container as privileged, and prefer a dedicated host or VM for it.
+#   * shares one directory between host and worker at the SAME path, because the sandbox is
+#     started by the host's daemon and must be able to mount the checkout.
+#
+# Before the first start (values go in .env):
+#   OPSMITH_WORK_DIR=/var/lib/opsmith/work
+#   DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+#   sudo install -d -o 10001 -g 10001 -m 0750 /var/lib/opsmith/work
+services:
+  worker:
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID in .env to the group id of /var/run/docker.sock}"
+    environment:
+      OPSMITH_SANDBOX_BACKEND: docker
+      OPSMITH_WORK_DIR: ${OPSMITH_WORK_DIR:?Set OPSMITH_WORK_DIR in .env to a host directory owned by uid 10001}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${OPSMITH_WORK_DIR:?Set OPSMITH_WORK_DIR in .env to a host directory owned by uid 10001}:${OPSMITH_WORK_DIR}

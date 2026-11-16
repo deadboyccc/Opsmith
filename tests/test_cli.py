@@ -119,3 +119,13 @@ def test_version(capsys) -> None:
     with pytest.raises(SystemExit):
         main(["--version"])
     assert "opsmith" in capsys.readouterr().out
+
+
+def test_init_does_not_print_the_database_password(env: Path, monkeypatch, capsys) -> None:
+    settings = Settings(
+        database_url="postgresql+psycopg://opsmith:s3cr3t-pw@db.internal:5432/opsmith"
+    )
+    assert "s3cr3t-pw" not in settings.database_display
+    assert "db.internal" in settings.database_display
+    assert main(["init", "--tenant", "acme"]) == 0  # SQLite here: the path is shown as is
+    assert "database: sqlite:///" in capsys.readouterr().out

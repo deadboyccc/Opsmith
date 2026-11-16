@@ -28,6 +28,7 @@ MAX_OUTPUT = 20_000
 MAX_WRITE_BYTES = 512_000
 MAX_READ_BYTES = 5 * 1024 * 1024
 SANDBOX_BACKENDS = ("docker", "local")
+DOCKER_ERROR_EXIT = 125  # `docker run` exits with 125 when the docker command itself fails
 # Backends that actually confine what a command can reach. Anything else is development-only.
 ISOLATING_BACKENDS = frozenset({"docker"})
 # Entries at the top of the checkout that agents may never read, write or list.
@@ -160,7 +161,9 @@ class DockerSandbox:
             self.image,
             "sh",
             "-c",
-            command,
+            # One stream inside the container: Docker forwards stdout and stderr separately,
+            # which would otherwise scramble the order of a check's output.
+            f"exec 2>&1; {command}",
         ]
 
     def run(self, command: str, timeout: int = 600) -> CommandResult:
@@ -183,7 +186,30 @@ class DockerSandbox:
             raw = exc.stdout or ""
             out = raw.decode(errors="replace") if isinstance(raw, bytes) else raw
             return CommandResult(command, 124, _cap(out) or "timed out", timed_out=True)
+        if proc.returncode == DOCKER_ERROR_EXIT:
+            # `docker run` itself failed (daemon unreachable, image missing, bad mount). That
+            # is an infrastructure problem, not a failing check, and must not be reported as one.
+            raise SandboxUnavailable(f"docker could not start the sandbox: {proc.stdout[-500:]}")
         return CommandResult(command, proc.returncode, _cap(proc.stdout or ""))
+
+
+def docker_daemon_error() -> str | None:
+    """Why the Docker daemon cannot be used from here, or ``None`` when it can."""
+    if shutil.which("docker") is None:
+        return "the docker CLI is not on the worker's PATH"
+    try:
+        probe = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"the docker CLI failed: {exc}"
+    if probe.returncode != 0:
+        return f"cannot reach the Docker daemon: {probe.stderr.strip()[-300:]}"
+    return None
 
 
 class WorkspaceError(ValueError):
@@ -257,10 +283,11 @@ class Workspace:
 
 def make_sandbox(backend: str, root: Path, image: str) -> Sandbox:
     if backend == "docker":
-        if shutil.which("docker") is None:
+        problem = docker_daemon_error()
+        if problem:
             raise SandboxUnavailable(
-                "the docker sandbox needs the docker CLI on the worker's PATH; install Docker "
-                "or see docs/DEPLOYMENT.md for the sandbox options"
+                f"the docker sandbox is not usable: {problem}. See docs/DEPLOYMENT.md "
+                "(Execution sandbox) for how to give the worker a sandbox."
             )
         return DockerSandbox(root, image)
     if backend == "local":

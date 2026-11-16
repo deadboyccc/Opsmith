@@ -18,7 +18,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# The Docker CLI only (no daemon): the worker uses it to start sandbox containers when it is
+# given a Docker socket (docker-compose.sandbox.yml). Without a socket it is inert.
+FROM docker:29.9.3-cli AS docker-cli
+
 FROM base AS runtime
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN uv sync --frozen --no-dev --no-install-project --extra anthropic --extra postgres
 COPY src ./src
