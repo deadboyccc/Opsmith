@@ -39,6 +39,9 @@ class Settings(BaseModel):
     # itself runs in a container and talks to the host's Docker daemon, this must be a path
     # that is mounted at the same location on the host.
     work_dir: Path | None = None
+    # The only directory file connectors and local-SCM repositories may read. Unset disables
+    # both, so project configuration can never point the worker at arbitrary host files.
+    local_root: Path | None = None
     worker_lease_seconds: int = Field(default=900, ge=30)
     log_level: str = "INFO"
     log_json: bool = True
@@ -65,6 +68,7 @@ class Settings(BaseModel):
             sandbox_backend=_env("SANDBOX_BACKEND", "docker"),
             sandbox_image=_env("SANDBOX_IMAGE", "python:3.12-slim"),
             work_dir=Path(_env("WORK_DIR", "")) if _env("WORK_DIR", "") else None,
+            local_root=Path(_env("LOCAL_ROOT", "")) if _env("LOCAL_ROOT", "") else None,
             worker_lease_seconds=int(_env("WORKER_LEASE_SECONDS", "900")),
             log_level=_env("LOG_LEVEL", "INFO"),
             log_json=_env("LOG_JSON", "true").lower() in {"1", "true", "yes"},

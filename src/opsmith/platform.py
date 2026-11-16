@@ -67,7 +67,11 @@ class Platform:
         self.gateway = gateway or default_gateway(self.settings)
         self.scm = scm or SCMRegistry(
             {
-                "local": LocalSCM(self.settings.data_dir / "local_prs"),
+                "local": LocalSCM(
+                    self.settings.data_dir / "local_prs",
+                    root=self.settings.local_root,
+                    deny=(self.settings.data_dir,),
+                ),
                 "github": GitHubSCM(),
             }
         )

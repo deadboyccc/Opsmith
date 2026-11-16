@@ -27,7 +27,9 @@ FAKE_AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", log_json=False, sandbox_backend="local")
+    return Settings(
+        data_dir=tmp_path / "data", log_json=False, sandbox_backend="local", local_root=tmp_path
+    )
 
 
 @pytest.fixture

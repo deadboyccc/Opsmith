@@ -35,6 +35,8 @@ def demo(tmp_path_factory: pytest.TempPathFactory):
             data_dir=result.data_dir,
             log_json=False,
             database_url=os.environ.get("OPSMITH_DATABASE_URL", ""),
+            sandbox_backend="local",
+            local_root=base,
         )
     )
     return result, platform

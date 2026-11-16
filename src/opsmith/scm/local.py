@@ -17,6 +17,7 @@ from typing import Any
 from opsmith.db import utcnow
 from opsmith.executor.sandbox import LocalSandbox
 from opsmith.gitutil import run_git
+from opsmith.localfs import LocalAccessError, confine
 from opsmith.models import Repository
 from opsmith.scm.base import (
     PullRequestRef,
@@ -32,10 +33,26 @@ _LOCK = threading.Lock()
 class LocalSCM(SCMProvider):
     name = "local"
 
-    def __init__(self, state_dir: Path, run_ci: bool = True) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        run_ci: bool = True,
+        *,
+        root: Path | None = None,
+        deny: tuple[Path, ...] = (),
+    ) -> None:
         self.state_dir = state_dir
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.run_ci = run_ci
+        self.root = root
+        self.deny = deny
+
+    def _source(self, repo: Repository) -> str:
+        """The repository path, confined to the directory local components may read."""
+        try:
+            return str(confine(repo.url, self.root, what="local repository", deny=self.deny))
+        except LocalAccessError as exc:
+            raise SCMError(str(exc)) from exc
 
     def _state_file(self, repo: Repository) -> Path:
         return self.state_dir / f"{repo.id}.json"
@@ -48,13 +65,14 @@ class LocalSCM(SCMProvider):
         self._state_file(repo).write_text(json.dumps(prs, indent=2))
 
     def checkout(self, repo: Repository, dest: Path) -> Path:
+        url = self._source(repo)
         if (dest / ".git").exists():
-            run_git(["fetch", repo.url, repo.default_branch], dest)
+            run_git(["fetch", url, repo.default_branch], dest)
             run_git(["reset", "--hard", "FETCH_HEAD"], dest)
             run_git(["clean", "-fdx"], dest)
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            run_git(["clone", "--branch", repo.default_branch, repo.url, str(dest)])
+            run_git(["clone", "--branch", repo.default_branch, url, str(dest)])
         return dest
 
     def push_branch(
@@ -62,7 +80,9 @@ class LocalSCM(SCMProvider):
     ) -> None:
         check_pushable(repo, branch)
         run_git(
-            ["push", "--force", repo.url, f"HEAD:refs/heads/{branch}"], workdir, git_dir=git_dir
+            ["push", "--force", self._source(repo), f"HEAD:refs/heads/{branch}"],
+            workdir,
+            git_dir=git_dir,
         )
 
     def create_pull_request(
@@ -74,7 +94,7 @@ class LocalSCM(SCMProvider):
                 if pr["branch"] == branch and pr["state"] == "open":
                     return PullRequestRef(pr["number"], pr["url"])
             number = len(prs) + 1
-            sha = run_git(["rev-parse", f"refs/heads/{branch}"], Path(repo.url)).strip()
+            sha = run_git(["rev-parse", f"refs/heads/{branch}"], Path(self._source(repo))).strip()
             pr = {
                 "number": number,
                 "url": f"local://{repo.name}/pull/{number}",
@@ -99,7 +119,7 @@ class LocalSCM(SCMProvider):
         pr = prs[number - 1]
         tmp = Path(tempfile.mkdtemp(prefix="opsmith-ci-"))
         try:
-            run_git(["clone", "--branch", pr["branch"], repo.url, str(tmp / "src")])
+            run_git(["clone", "--branch", pr["branch"], self._source(repo), str(tmp / "src")])
             results = []
             for name, cmd in (
                 ("build", repo.build_command),
@@ -138,7 +158,7 @@ class LocalSCM(SCMProvider):
         with _LOCK:
             prs = self._load(repo)
             pr = prs[number - 1]
-            src = Path(repo.url)
+            src = Path(self._source(repo))
             run_git(
                 ["merge", "--no-ff", "-m", f"Merge PR #{number}", pr["branch"]],
                 src,
