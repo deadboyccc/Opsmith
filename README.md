@@ -67,10 +67,11 @@ OPSMITH_DATA_DIR=./opsmith-demo/data uv run opsmith api
 # open http://127.0.0.1:8000/ui and sign in with the admin key the demo printed
 ```
 
-This is what the demo's task looks like once it has gone all the way, with its trail back to
-the raw evidence (all data is synthetic; more pages in the [UI tour](docs/guide/ui-tour.md)):
+Here is the demo in one minute, with a reviewer approving in the UI
+([full-size MP4](docs/images/demo.mp4); all data is synthetic; more pages in the
+[UI tour](docs/guide/ui-tour.md)):
 
-<img src="docs/images/ui-task-verified.png" alt="A verified task with its problem statement, execution report, provenance chain and audit trail" width="760">
+<a href="docs/images/demo.mp4"><img src="docs/images/demo.gif" alt="A reviewer signs in, reads the top-ranked task and its evidence, and approves it. Opsmith implements the fix in the sandbox, opens a pull request, a human merges it, and the task ends verified." width="720"></a>
 
 ## How it works
 

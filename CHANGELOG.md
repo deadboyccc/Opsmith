@@ -12,6 +12,10 @@ the database schema says so under *Upgrade notes*.
   are verified and how. The Loki and Prometheus connectors now run against real servers in CI
   on every push (Loki 2.9.17 and 3.7.10; Prometheus v2.53.5, v3.5.5 and v3.16.0), through
   `tests/test_connectors_live.py`.
+- A one-minute demonstration video (`docs/images/demo.mp4`, with a GIF preview in the README),
+  recorded from the offline demo by `scripts/demo_video.py`: a reviewer approves a task in the
+  UI and it goes through to `verified`.
+- A mascot and a social preview image (`docs/images/brand/`).
 
 ### Fixed
 
