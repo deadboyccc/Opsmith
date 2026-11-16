@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/brand/social-preview.png" alt="Opsmith: production signals in, reviewed pull requests out. Smithy, a robot blacksmith, forges a glowing pull request on an anvil." width="840">
+</p>
+
 # Opsmith
 
 [![CI](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml)

@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Smithy, the Opsmith mascot</title>
+  <defs>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E2EAF3"/>
+      <stop offset="1" stop-color="#9DB0C6"/>
+    </linearGradient>
+    <linearGradient id="steelDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B9C7D8"/>
+      <stop offset="1" stop-color="#7D90A8"/>
+    </linearGradient>
+    <linearGradient id="apron" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B4532A"/>
+      <stop offset="1" stop-color="#8A3A1C"/>
+    </linearGradient>
+    <linearGradient id="anvil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#475569"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <radialGradient id="hot" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF7D6"/>
+      <stop offset="0.45" stop-color="#FDBA74"/>
+      <stop offset="1" stop-color="#F97316"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FB923C" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#FB923C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="eyeGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5EEAD4" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#5EEAD4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- ground shadow -->
+  <ellipse cx="256" cy="470" rx="190" ry="18" fill="#000" opacity="0.25"/>
+
+  <!-- antenna -->
+  <line x1="214" y1="70" x2="214" y2="40" stroke="#9DB0C6" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="214" cy="34" r="16" fill="url(#eyeGlow)"/>
+  <circle cx="214" cy="34" r="8" fill="#5EEAD4"/>
+
+  <!-- raised arm (behind head), holding the hammer -->
+  <path d="M300 200 C 330 170, 350 140, 352 108" stroke="url(#steelDark)" stroke-width="26" stroke-linecap="round" fill="none"/>
+  <circle cx="352" cy="104" r="20" fill="#9DB0C6"/>
+  <!-- hammer -->
+  <g transform="rotate(-28 352 100)">
+    <rect x="346" y="40" width="12" height="96" rx="6" fill="#8B5A2B"/>
+    <rect x="316" y="22" width="76" height="34" rx="8" fill="url(#anvil)"/>
+    <rect x="316" y="22" width="76" height="9" rx="4" fill="#64748B"/>
+  </g>
+
+  <!-- head -->
+  <rect x="134" y="66" width="160" height="128" rx="40" fill="url(#steel)"/>
+  <rect x="152" y="92" width="124" height="74" rx="26" fill="#0E1726"/>
+  <!-- eyes: friendly, slightly smiling arcs -->
+  <ellipse cx="190" cy="128" rx="26" ry="22" fill="url(#eyeGlow)" opacity="0.6"/>
+  <ellipse cx="240" cy="128" rx="26" ry="22" fill="url(#eyeGlow)" opacity="0.6"/>
+  <path d="M176 132 Q 190 114 204 132" stroke="#5EEAD4" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M226 132 Q 240 114 254 132" stroke="#5EEAD4" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <!-- cheek lights -->
+  <circle cx="166" cy="152" r="5" fill="#FB923C" opacity="0.8"/>
+  <circle cx="262" cy="152" r="5" fill="#FB923C" opacity="0.8"/>
+  <!-- ear bolts -->
+  <rect x="122" y="112" width="16" height="36" rx="7" fill="#7D90A8"/>
+  <rect x="290" y="112" width="16" height="36" rx="7" fill="#7D90A8"/>
+
+  <!-- neck -->
+  <rect x="196" y="190" width="36" height="20" rx="6" fill="#7D90A8"/>
+
+  <!-- torso -->
+  <rect x="132" y="204" width="164" height="150" rx="44" fill="url(#steel)"/>
+  <!-- apron -->
+  <path d="M152 236 H276 V352 Q276 372 256 372 H172 Q152 372 152 352 Z" fill="url(#apron)"/>
+  <path d="M152 236 L 146 214 M276 236 L 282 214" stroke="#8A3A1C" stroke-width="7" stroke-linecap="round"/>
+  <rect x="186" y="286" width="56" height="36" rx="8" fill="#000" opacity="0.18"/>
+  <!-- apron emblem: a tiny pull-request mark -->
+  <g stroke="#FDBA74" stroke-width="4.5" fill="none" stroke-linecap="round">
+    <circle cx="202" cy="258" r="5"/>
+    <line x1="202" y1="263" x2="202" y2="277"/>
+    <circle cx="202" cy="282" r="5"/>
+    <circle cx="228" cy="282" r="5"/>
+    <path d="M228 277 V 266 Q 228 258 220 258 H 214"/>
+  </g>
+
+  <!-- legs -->
+  <rect x="160" y="360" width="40" height="80" rx="16" fill="url(#steelDark)"/>
+  <rect x="228" y="360" width="40" height="80" rx="16" fill="url(#steelDark)"/>
+  <rect x="150" y="430" width="60" height="26" rx="12" fill="#334155"/>
+  <rect x="218" y="430" width="60" height="26" rx="12" fill="#334155"/>
+
+  <!-- forge glow behind the work piece -->
+  <circle cx="392" cy="318" r="86" fill="url(#glow)"/>
+
+  <!-- anvil -->
+  <path d="M318 340 H 470 Q 470 362 440 366 H 420 L 410 392 H 432 Q 444 392 444 404 V 420 H 344 V 404 Q 344 392 356 392 H 378 L 368 366 H 350 Q 300 362 296 340 Z" fill="url(#anvil)"/>
+  <rect x="318" y="336" width="152" height="10" rx="5" fill="#64748B"/>
+
+  <!-- arm resting on the anvil's edge -->
+  <path d="M290 262 C 310 280, 318 300, 322 322" stroke="url(#steelDark)" stroke-width="24" stroke-linecap="round" fill="none"/>
+  <circle cx="324" cy="326" r="17" fill="#9DB0C6"/>
+
+  <!-- the work piece: a glowing pull-request symbol, blurred glow under a solid stroke -->
+  <g id="pr" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="372" cy="270" r="12"/>
+    <line x1="372" y1="282" x2="372" y2="312"/>
+    <circle cx="372" cy="322" r="10"/>
+    <circle cx="428" cy="322" r="12"/>
+    <path d="M428 310 V 292 Q 428 270 406 270 H 396"/>
+    <path d="M406 259 L 395 270 L 406 281"/>
+  </g>
+  <use href="#pr" stroke="#F97316" stroke-width="18" filter="url(#blur)" opacity="0.9"/>
+  <use href="#pr" stroke="#FDBA74" stroke-width="10"/>
+  <use href="#pr" stroke="#FFF4D6" stroke-width="3.5"/>
+
+  <!-- sparks -->
+  <g stroke="#FCD34D" stroke-width="5" stroke-linecap="round">
+    <line x1="446" y1="250" x2="462" y2="232"/>
+    <line x1="458" y1="282" x2="482" y2="276"/>
+    <line x1="430" y1="236" x2="434" y2="212"/>
+    <line x1="340" y1="244" x2="326" y2="226"/>
+  </g>
+  <g fill="#FDE68A">
+    <circle cx="474" cy="250" r="4"/>
+    <circle cx="452" cy="212" r="3"/>
+    <circle cx="488" cy="300" r="3"/>
+    <circle cx="318" cy="250" r="3"/>
+  </g>
+</svg>

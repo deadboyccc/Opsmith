@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&display=block" rel="stylesheet">
+<style>
+  html,body{margin:0;width:1280px;height:640px;overflow:hidden}
+  body{
+    background:
+      radial-gradient(520px 420px at 300px 470px, rgba(249,115,22,.22), transparent 70%),
+      radial-gradient(700px 500px at 1100px 80px, rgba(94,234,212,.10), transparent 70%),
+      linear-gradient(135deg,#0B1120 0%,#111A33 55%,#161B3A 100%);
+    font-family:Inter,sans-serif;color:#E2E8F0;position:relative}
+  .dots{position:absolute;inset:0;
+    background-image:radial-gradient(rgba(148,163,184,.13) 1.2px,transparent 1.3px);
+    background-size:28px 28px;
+    -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 45%,#000 100%)}
+  .mascot{position:absolute;left:56px;top:44px;width:552px;height:552px}
+  .text{position:absolute;left:640px;top:100px;width:600px}
+  h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:112px;line-height:1;
+     margin:0 0 26px;letter-spacing:-3px;color:#F8FAFC}
+  h1 span{background:linear-gradient(90deg,#FDBA74,#F97316);-webkit-background-clip:text;color:transparent}
+  .tag{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:38px;line-height:1.22;
+       color:#F1F5F9;margin:0 0 22px;letter-spacing:-.5px}
+  .sub{font-size:21px;line-height:1.5;color:#94A3B8;margin:0 0 30px;max-width:560px}
+  .pills{display:grid;grid-template-columns:repeat(2,max-content);gap:12px}
+  .pill{font-size:18px;font-weight:600;padding:9px 16px;white-space:nowrap;border-radius:999px;
+        background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.25);color:#CBD5E1}
+  .pill b{color:#5EEAD4;margin-right:7px}
+</style></head>
+<body>
+  <div class="dots"></div>
+  <img class="mascot" src="mascot.svg" alt="">
+  <div class="text">
+    <h1>Op<span>smith</span></h1>
+    <p class="tag">Production signals in.<br>Reviewed pull requests out.</p>
+    <p class="sub">Logs, metrics and code audits become ranked engineering tasks. You approve; a sandboxed agent opens the pull request.</p>
+    <div class="pills">
+      <div class="pill"><b>✓</b>Human approval</div>
+      <div class="pill"><b>✓</b>Never merges</div>
+      <div class="pill"><b>✓</b>Self-hosted</div>
+      <div class="pill"><b>✓</b>Any model</div>
+    </div>
+  </div>
+</body></html>
