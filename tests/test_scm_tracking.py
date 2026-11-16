@@ -12,7 +12,8 @@ from opsmith.db import utcnow
 from opsmith.models import AnalysisBundle, Job, Repository, Task
 from opsmith.scm import GitHubSCM, SCMError
 from opsmith.scm.local import LocalSCM
-from tests.test_executor import approve, make_task
+from opsmith.tracking import MAX_VERIFY_DEFERRALS
+from tests.test_executor import EditingAgent, _use_agent, approve, make_task
 
 
 def gh_repo(**kw) -> Repository:
@@ -134,6 +135,47 @@ def test_pr_tracking_merge_and_verification(platform, seed, drain) -> None:
     with platform.db.session() as s:
         assert platform.verifier.run(s, task_id_static)["outcome"] == "verified"
         assert s.get(Task, task_id_static).status == "verified"
+
+
+def test_a_task_merged_again_after_a_regression_is_verified_again(platform, seed, drain) -> None:
+    task_id = make_task(platform, seed, fp="fp-static-2")
+    scm = platform.scm.for_provider("local")
+    assert isinstance(scm, LocalSCM)
+    for merge in (1, 2):
+        approve(platform, seed, task_id)
+        drain()
+        with platform.db.session() as s:
+            t = s.get(Task, task_id)
+            assert t.status == "pr_open", t.execution_report
+            repo, number = s.get(Repository, seed.repo.id), t.pr_number
+        scm.human_merge(repo, number)
+        with platform.db.session() as s:
+            assert platform.tracker.run(s, seed.project.id)["updated"] == {task_id: "merged"}
+        if merge == 1:  # the verifier found a regression; the aggregator reopens the task
+            with platform.db.session() as s:
+                t = s.get(Task, task_id)
+                transition_task(s, t, "regressed")
+                transition_task(s, t, "in_review")
+            _use_agent(platform, seed, EditingAgent("app/second_fix.py", "RETRIES = 3\n"))
+    with platform.db.session() as s:
+        jobs = s.scalars(select(Job).where(Job.kind == "verify").order_by(Job.created_at)).all()
+        assert len({j.idempotency_key for j in jobs}) == 2  # one per merge
+        assert jobs[-1].status == "queued"  # the second merge will be verified
+
+
+def test_verification_without_post_merge_data_fails_loudly(platform, seed) -> None:
+    """Waiting is fine; giving up without telling anyone is not (no silent drops)."""
+    task_id = make_task(platform, seed, fp="fp-static-2")
+    with platform.db.session() as s:
+        t = s.get(Task, task_id)
+        for state in ("approved", "executing", "pr_open", "merged"):
+            transition_task(s, t, state)
+        t.merged_at = utcnow()
+    with platform.db.session() as s, pytest.raises(queue.RetryLater):
+        platform.verifier.run(s, task_id, attempt=MAX_VERIFY_DEFERRALS - 1)
+    with platform.db.session() as s, pytest.raises(queue.PermanentFailure, match="by hand"):
+        platform.verifier.run(s, task_id, attempt=MAX_VERIFY_DEFERRALS)
+    assert MAX_VERIFY_DEFERRALS >= 26  # a daily audit always falls inside the wait
 
 
 def test_verification_detects_regression(platform, seed) -> None:

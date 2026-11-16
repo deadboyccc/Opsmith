@@ -117,8 +117,12 @@ class Worker:
         """
         recovered = 0
         with self.db.session() as s:
+            # Locked, and rows a renewing heartbeat holds are skipped: a lease renewed between
+            # this query and the update must not be taken away.
             expired = s.scalars(
-                select(Job).where(Job.status == "running", Job.lease_expires_at < utcnow())
+                select(Job)
+                .where(Job.status == "running", Job.lease_expires_at < utcnow())
+                .with_for_update(skip_locked=True)
             ).all()
             for job in expired:
                 job.locked_by = None
@@ -176,7 +180,9 @@ class Worker:
         return results
 
     def _owns(self, session: Session, job: Job) -> bool:
-        session.refresh(job)
+        """Whether this worker still holds the job. The row stays locked until the caller
+        commits, so ownership cannot change between this check and the write."""
+        session.refresh(job, with_for_update=True)
         return job.status == "running" and job.locked_by == self.worker_id
 
     def _heartbeat(self, job_id: str, stop: threading.Event) -> None:
@@ -244,10 +250,18 @@ class Worker:
         finally:
             session.close()
 
+    def _lost(self, job: Job, outcome: str) -> WorkResult:
+        """The lease expired and the job was requeued or taken by another worker: leave its
+        bookkeeping to the new owner instead of requeueing it under them."""
+        log.warning(f"job {outcome} after losing its lease", extra={"job_id": job.id})
+        return WorkResult(job.id, job.kind, "lost_lease")
+
     def _reschedule(self, job_id: str, exc: RetryLater) -> WorkResult:
         with self.db.session() as s:
             job = s.get(Job, job_id)
             assert job is not None
+            if not self._owns(s, job):
+                return self._lost(job, "deferred")
             job.deferrals += 1
             job.attempts = max(job.attempts - 1, 0)  # a deferral is not a failed attempt
             if job.deferrals > MAX_DEFERRALS:
@@ -265,6 +279,8 @@ class Worker:
         with self.db.session() as s:
             job = s.get(Job, job_id)
             assert job is not None
+            if not self._owns(s, job):
+                return self._lost(job, "failed")
             job.last_error = error[:4000]
             job.locked_by = None
             job.lease_expires_at = None

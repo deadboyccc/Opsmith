@@ -18,7 +18,9 @@ from opsmith.schemas import ProjectSettings
 from opsmith.scm import SCMError, SCMRegistry
 
 log = logging.getLogger(__name__)
-MAX_VERIFY_DEFERRALS = 4
+# Hourly retries while there is no post-merge data: 48 covers a daily audit and any normal
+# analysis interval. After that the verify job fails (dead, audited, notified).
+MAX_VERIFY_DEFERRALS = 48
 
 
 class PRTracker:
@@ -76,7 +78,9 @@ class PRTracker:
                         tenant_id=task.tenant_id,
                         kind="verify",
                         payload={"task_id": task.id},
-                        idempotency_key=f"verify:{task.id}",
+                        # One verification per merge: a task merged again after a
+                        # regression is verified again.
+                        idempotency_key=f"verify:{task.id}:{task.merged_at.isoformat()}",
                         run_after=utcnow() + timedelta(hours=settings.verification_delay_hours),
                     )
                 updated[task.id] = "merged"
@@ -150,7 +154,11 @@ class Verifier:
         if not observed:
             if attempt < MAX_VERIFY_DEFERRALS:
                 raise queue.RetryLater(3600, "waiting for post-merge signal data")
-            return {"verified": None, "reason": "no post-merge data"}
+            raise queue.PermanentFailure(
+                f"no post-merge signals or audit for task {task.id} within "
+                f"{MAX_VERIFY_DEFERRALS} hours; check it by hand, or retry this job once data "
+                "has arrived"
+            )
         outcome = "regressed" if evidence else "verified"
         transition_task(session, task, outcome, details={"evidence": evidence[:10]})
         if outcome == "regressed":

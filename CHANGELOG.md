@@ -40,6 +40,15 @@ the database schema says so under *Upgrade notes*.
 
 ### Fixed
 
+- **A worker that had lost its lease could hand its job to a third worker.** When its handler
+  then failed or asked to be retried later, it requeued the job although another worker was
+  already running it. Every write after the handler now checks, under a row lock, that the
+  worker still owns the job, and lease recovery skips a lease that is being renewed.
+- **A task merged a second time was never verified.** The verify job was keyed by task, so
+  after a regression and a new pull request the second merge reused the first, finished job.
+- **Post-merge verification gave up silently** after four hours without data, which with the
+  default daily audit left most code-only tasks `merged` for good. It now waits up to 48
+  hours and then fails the job (dead, audited, notified) instead of succeeding quietly.
 - **The Prometheus connector could read past the end of its window.** It rounded the window's
   times to the millisecond, so an end such as `…36.1766` became `…36.177` and Prometheus
   returned a point that also belonged to the next window. Times are now truncated. Found by

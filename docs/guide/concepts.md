@@ -132,7 +132,10 @@ explicitly acknowledges it; `excluded` paths cannot be approved at all.
 Covered in [From approval to pull request](#from-approval-to-pull-request). After a human
 merges the PR, a verification job watches the task's original signals. If the log template or
 metric anomaly does not come back, and a later audit no longer reports the static finding, the
-task becomes `verified`; otherwise `regressed`, which returns it to review.
+task becomes `verified`; otherwise `regressed`, which returns it to review. A task merged again
+after a regression is verified again. If no post-merge signals or audit arrive within 48 hours
+of the delay, the verification job fails (a dead job, with a notification); retry it from the
+*Jobs* page once data has arrived.
 
 ## Lifecycles
 

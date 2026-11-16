@@ -129,3 +129,33 @@ def test_expired_leases_are_recovered(platform, seed) -> None:
     worker = _worker(platform, lambda _s, _j: {"ok": True})
     assert worker.recover_expired_leases() == 1
     assert worker.run_once().status == "succeeded"
+
+
+@pytest.mark.parametrize("outcome", [RuntimeError("boom"), RetryLater(60, "later")])
+def test_a_worker_that_lost_its_lease_leaves_the_job_to_its_new_owner(
+    platform, seed, outcome: Exception
+) -> None:
+    """A's lease lapses while its handler runs and B takes the job over. When A's handler then
+    fails or defers, A must not requeue the job under B (a third worker would run it too)."""
+    db = platform.db
+    b = Worker(db, {}, worker_id="B", heartbeat_seconds=999)
+
+    def handler(s, job):
+        with db.session() as other:
+            other.get(Job, job.id).lease_expires_at = utcnow() - timedelta(seconds=1)
+        assert b.recover_expired_leases() == 1
+        assert b._claim() == job.id
+        raise outcome
+
+    a = Worker(db, {"x": handler}, worker_id="A", heartbeat_seconds=999)
+    with db.session() as s:
+        job_id = queue.enqueue(
+            s, tenant_id=seed.tenant.id, kind="x", payload={}, idempotency_key="lease"
+        ).id
+    result = a.run_once()
+    assert result is not None
+    assert result.status == "lost_lease"
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        assert (job.status, job.locked_by, job.deferrals) == ("running", "B", 0)
+    assert Worker(db, {"x": handler}, worker_id="C")._claim() is None
