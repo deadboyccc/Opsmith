@@ -9,7 +9,10 @@ from pydantic import BaseModel
 
 
 class LLMError(RuntimeError):
-    pass
+    """``usage`` is set by a provider when the call failed *after* the API billed it (refusal,
+    truncation). The gateway records it before re-raising, so budgets see every billed call."""
+
+    usage: ProviderResponse | None = None
 
 
 class LLMOutputError(LLMError):

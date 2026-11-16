@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -19,7 +18,7 @@ from typing import Any, Protocol
 from opsmith.executor.sandbox import Workspace, WorkspaceError
 from opsmith.llm.anthropic_provider import fallback_kwargs, make_client
 from opsmith.llm.pricing import cost_usd
-from opsmith.llm.prompts import INJECTION_GUARD
+from opsmith.llm.prompts import INJECTION_GUARD, untrusted_json
 
 log = logging.getLogger(__name__)
 
@@ -285,7 +284,7 @@ class ClaudeCodingAgent:
             {
                 "role": "user",
                 "content": "Implement this approved task.\n<untrusted_data>\n"
-                + json.dumps(brief, indent=1, default=str)
+                + untrusted_json(brief, sort_keys=False)
                 + "\n</untrusted_data>",
             }
         ]

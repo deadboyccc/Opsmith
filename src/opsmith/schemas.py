@@ -7,7 +7,7 @@ anything that fails validation is rejected (and retried once with the error).
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -31,6 +31,11 @@ CATEGORIES: tuple[str, ...] = (
 # --------------------------------------------------------------------------- signals
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Signals are stored and compared in aware UTC; a naive timestamp is taken to be UTC."""
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+
 class LogEvent(BaseModel):
     """Common event schema (spec 5.1) for log records."""
 
@@ -44,6 +49,16 @@ class LogEvent(BaseModel):
     correlation_id: str | None = None
     version: str | None = None
 
+    _utc = field_validator("timestamp")(_as_utc)
+
+    @field_validator("trace_id", "correlation_id", "version", mode="before")
+    @classmethod
+    def _id_as_text(cls, value: Any) -> Any:
+        # Shippers send numeric ids and versions; one such record must not fail the batch.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return value
+
 
 class MetricPoint(BaseModel):
     timestamp: datetime
@@ -52,6 +67,8 @@ class MetricPoint(BaseModel):
     name: str
     value: float
     labels: dict[str, str] = Field(default_factory=dict)
+
+    _utc = field_validator("timestamp")(_as_utc)
 
 
 # --------------------------------------------------------------------------- settings
@@ -189,6 +206,23 @@ class ProjectSettings(BaseModel):
 
 # --------------------------------------------------------------------------- LLM stage I/O
 
+# Model output is untrusted. Identifiers are bounded to the columns that store them
+# (``models.Finding`` / ``models.Lead``), so one oversized or nonsensical value is contained
+# here instead of failing the whole run at flush time.
+MAX_SIGNAL_CHARS = 200
+MAX_PATH_CHARS = 500
+MAX_SOURCE_LINE = 10_000_000
+
+
+def _clamp_signal(value: Any) -> Any:
+    """An over-long signal is still an identity: keep a stable prefix of it."""
+    return value[:MAX_SIGNAL_CHARS] if isinstance(value, str) else value
+
+
+def _bounded_path(value: Any) -> Any:
+    """A cut-off path would name a different file, so an over-long one is dropped instead."""
+    return None if isinstance(value, str) and len(value) > MAX_PATH_CHARS else value
+
 
 class EvidenceRefModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -210,6 +244,15 @@ class InferenceFinding(BaseModel):
     suggested_next_investigation: str = ""
     from_lead_id: str | None = None
 
+    _signal = field_validator("signal", mode="before")(_clamp_signal)
+    _path = field_validator("suspected_path", mode="before")(_bounded_path)
+
+    @field_validator("suspected_line")
+    @classmethod
+    def _plausible_line(cls, value: int | None) -> int | None:
+        """A line that cannot exist (zero, negative, absurdly large) is no location at all."""
+        return value if value is not None and 1 <= value <= MAX_SOURCE_LINE else None
+
 
 class LeadUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -229,6 +272,9 @@ class NewLead(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     signal: str | None = None
     suspected_path: str | None = None
+
+    _signal = field_validator("signal", mode="before")(_clamp_signal)
+    _path = field_validator("suspected_path", mode="before")(_bounded_path)
 
 
 class InferenceOutput(BaseModel):

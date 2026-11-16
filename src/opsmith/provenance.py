@@ -50,6 +50,8 @@ def task_provenance(session: Session, task: Task) -> dict[str, Any]:
         bundle_ids.update(run.input_bundle_ids)
     leads = session.scalars(select(Lead).where(Lead.id.in_(lead_ids))).all() if lead_ids else []
     investigation_leads = session.scalars(select(Lead).where(Lead.task_id == task.id)).all()
+    # A confirmed investigation lead is linked both ways (finding.lead_id and lead.task_id).
+    all_leads = list({lead.id: lead for lead in (*leads, *investigation_leads)}.values())
     return {
         "task": _row(
             task,
@@ -180,7 +182,7 @@ def task_provenance(session: Session, task: Task) -> dict[str, Any]:
                     "source",
                 ),
             )
-            for lead in [*leads, *investigation_leads]
+            for lead in all_leads
         ],
         "audit_log": [
             _row(

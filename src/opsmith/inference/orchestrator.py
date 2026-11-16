@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import select
@@ -22,14 +23,16 @@ from sqlalchemy.orm import Session
 from opsmith import audit_log, notifications, queue
 from opsmith.audit_log import ACTIVE_LEAD_STATES, transition_lead
 from opsmith.db import new_id, utcnow
-from opsmith.llm import BudgetExceeded, LLMGateway
+from opsmith.llm import BudgetExceeded, LLMError, LLMGateway
 from opsmith.models import AnalysisBundle, Finding, InferenceRun, Lead, Project, Service, Task
 from opsmith.observability import METRICS
-from opsmith.schemas import InferenceFinding, InferenceOutput, ProjectSettings
+from opsmith.redaction import Redactor
+from opsmith.schemas import MAX_SIGNAL_CHARS, InferenceFinding, InferenceOutput, ProjectSettings
 
 log = logging.getLogger(__name__)
 LEAD_CONTEXT_CHARS = 600
 MAX_LEAD_REFS = 5
+SUBJECT_CHARS = 300  # models.Notification.subject
 
 
 def finding_fingerprint(*parts: str | None) -> str:
@@ -127,27 +130,46 @@ class InferenceOrchestrator:
                     schema=InferenceOutput,
                     run_id=run.id,
                 )
-        except BudgetExceeded as exc:
+        except LLMError as exc:
+            # Finish the run instead of raising: the UsageRecords of calls the provider billed
+            # (invalid output, refusal, truncation) live in this transaction and must commit, or
+            # the cost caps never see them. Nothing was analysed, so the bundles stay unconsumed
+            # and the leads untouched; the next slot picks both up again.
+            over_budget = isinstance(exc, BudgetExceeded)
             self._finish(
                 run,
-                "budget_exceeded",
+                "budget_exceeded" if over_budget else "failed",
                 provider=stage_cfg.provider,
                 model=stage_cfg.model,
                 error=str(exc),
             )
+            if not over_budget:
+                audit_log.record(
+                    session,
+                    tenant_id=run.tenant_id,
+                    entity_type="inference_run",
+                    entity_id=run.id,
+                    action="inference.failed",
+                    details={"error": str(exc)[:500], "bundles": len(bundles)},
+                )
+            what = "budget exceeded" if over_budget else "failed"
             notifications.notify(
                 session,
                 tenant_id=run.tenant_id,
                 project_id=project.id,
-                event="budget.exceeded",
-                subject=f"Inference budget exceeded for {service.name}",
-                body=str(exc),
+                event="budget.exceeded" if over_budget else "inference.failed",
+                subject=f"Inference {what} for {service.name}"[:SUBJECT_CHARS],
+                body=str(exc)[:2000],
             )
             return run
 
-        valid_refs = self._valid_refs(bundles, leads)
+        # The model only ever saw identifiers after the gateway's redaction pass, so its
+        # citations are matched in that form and stored in their real one.
+        redactor = self.gateway.redactor(settings)
+        refs = self._as_sent(self._valid_refs(bundles, leads), redactor)
+        signals = self._as_sent(self._input_signals(bundles, leads), redactor, MAX_SIGNAL_CHARS)
         output = result.output
-        created = self._apply(session, run, service, settings, output, leads, valid_refs)
+        created = self._apply(session, run, service, settings, output, leads, refs, signals)
         for bundle in bundles:
             bundle.consumed_by_run_id = run.id
         run.output = output.model_dump(mode="json")
@@ -199,12 +221,17 @@ class InferenceOrchestrator:
 
     @staticmethod
     def _bundle_view(bundle: AnalysisBundle) -> dict[str, Any]:
+        def bounded(rows: list[Any]) -> list[Any]:
+            # Signals are shown at the length they can be stored at (findings and leads keep
+            # them in a bounded column), so the next run still recognises a lead's signal.
+            return [{**row, "signal": row["signal"][:MAX_SIGNAL_CHARS]} for row in rows]
+
         return {
             "id": bundle.id,
             "window": [bundle.window_start.isoformat(), bundle.window_end.isoformat()],
             "stats": bundle.stats,
-            "log_templates": bundle.log_templates,
-            "metric_features": bundle.metric_features,
+            "log_templates": bounded(bundle.log_templates),
+            "metric_features": bounded(bundle.metric_features),
         }
 
     @staticmethod
@@ -219,6 +246,27 @@ class InferenceOrchestrator:
         for lead in leads:
             refs.update(lead.evidence_refs)
         return refs
+
+    @staticmethod
+    def _input_signals(bundles: list[AnalysisBundle], leads: list[Lead]) -> set[str]:
+        signals: set[str] = set()
+        for b in bundles:
+            signals.update(row["signal"] for row in (*b.log_templates, *b.metric_features))
+        signals.update(lead.signal for lead in leads if lead.signal)
+        return signals
+
+    @staticmethod
+    def _as_sent(
+        values: Iterable[str], redactor: Redactor, limit: int | None = None
+    ) -> dict[str, str]:
+        """Map each identifier as the model saw it (bounded to ``limit``, then redacted by the
+        gateway) back to the identifier Opsmith stores. Sorted, so that when two identifiers
+        redact to the same text the choice between them is at least deterministic."""
+        sent: dict[str, str] = {}
+        for value in sorted(values):
+            real = value[:limit]
+            sent.setdefault(str(redactor.redact(real))[:limit], real)
+        return sent
 
     @staticmethod
     def _rejections(session: Session, project_id: str) -> list[dict[str, Any]]:
@@ -267,12 +315,20 @@ class InferenceOrchestrator:
         settings: ProjectSettings,
         output: InferenceOutput,
         leads: list[Lead],
-        valid_refs: set[str],
+        refs: dict[str, str],
+        signals: dict[str, str],
     ) -> int:
         lead_by_id = {lead.id: lead for lead in leads}
         created: list[Finding] = []
+        claimed: dict[str, Finding] = {}  # lead id -> the finding the model raised from it
         for f in output.findings:
-            created.append(self._create_finding(session, run, service, f, valid_refs))
+            row = self._create_finding(session, run, service, f, refs, signals)
+            created.append(row)
+            if f.from_lead_id:
+                claimed.setdefault(f.from_lead_id, row)
+        # ``finding_index`` may only point at the model's own findings, never at one
+        # synthesized below for another lead.
+        own = len(created)
 
         touched: set[str] = set()
         for upd in output.lead_updates:
@@ -288,15 +344,17 @@ class InferenceOrchestrator:
                 )
                 continue
             touched.add(lead.id)
-            refs = [r for r in upd.evidence_refs if r in valid_refs]
-            if refs:
-                lead.evidence_refs = (lead.evidence_refs + refs)[-20:]
+            cited = self._cited(upd.evidence_refs, refs)
+            if cited:
+                lead.evidence_refs = list(dict.fromkeys([*lead.evidence_refs, *cited]))[-20:]
             if upd.context_update:
                 lead.context = (lead.context + f"\n[{run.slot}] {upd.context_update}").strip()
             if upd.action == "confirm":
                 finding = None
-                if upd.finding_index is not None and 0 <= upd.finding_index < len(created):
+                if upd.finding_index is not None and 0 <= upd.finding_index < own:
                     finding = created[upd.finding_index]
+                if finding is None:
+                    finding = claimed.get(lead.id)
                 if finding is None:
                     finding = self._finding_from_lead(session, run, service, lead)
                     created.append(finding)
@@ -315,7 +373,9 @@ class InferenceOrchestrator:
                 self._carry(session, run, lead)
 
         for nl in output.new_leads:
-            fp_signal = nl.signal or finding_fingerprint(service.id, nl.title)
+            fp_signal = signals.get(nl.signal or "", nl.signal) or finding_fingerprint(
+                service.id, nl.title
+            )
             duplicate = session.scalar(
                 select(Lead).where(
                     Lead.service_id == service.id,
@@ -333,7 +393,7 @@ class InferenceOrchestrator:
                 hypothesis=nl.hypothesis,
                 signal=fp_signal,
                 suspected_path=nl.suspected_path,
-                evidence_refs=[r for r in nl.evidence_refs if r in valid_refs],
+                evidence_refs=self._cited(nl.evidence_refs, refs),
                 max_carry=settings.lead_max_carry,
                 originating_run_id=run.id,
                 last_run_id=run.id,
@@ -367,7 +427,7 @@ class InferenceOrchestrator:
                 tenant_id=lead.tenant_id,
                 project_id=lead.project_id,
                 event="lead.escalated",
-                subject=f"Lead needs human attention: {lead.title}",
+                subject=f"Lead needs human attention: {lead.title}"[:SUBJECT_CHARS],
                 body=f"Carried {lead.age - 1} times without resolution.\n{lead.context[-500:]}",
             )
             self._resolve_investigation(session, lead, "expired", None)
@@ -380,11 +440,13 @@ class InferenceOrchestrator:
         run: InferenceRun,
         service: Service,
         f: InferenceFinding,
-        valid_refs: set[str],
+        refs: dict[str, str],
+        signals: dict[str, str],
     ) -> Finding:
-        refs = [r for r in f.evidence_refs if r in valid_refs]
-        dropped = len(f.evidence_refs) - len(refs)
-        strength = 0.5 + 0.25 * min(len(refs), 6)
+        cited = self._cited(f.evidence_refs, refs)
+        dropped = sum(1 for r in f.evidence_refs if r not in refs)
+        strength = 0.5 + 0.25 * min(len(cited), 6)
+        signal = signals.get(f.signal or "", f.signal)
         finding = Finding(
             tenant_id=run.tenant_id,
             project_id=run.project_id,
@@ -395,14 +457,14 @@ class InferenceOrchestrator:
             description=f.description,
             severity=f.severity,
             # unsupported claims lose confidence
-            confidence=round(f.confidence * (1.0 if refs else 0.5), 3),
-            evidence_refs=refs,
+            confidence=round(f.confidence * (1.0 if cited else 0.5), 3),
+            evidence_refs=cited,
             repository_id=service.repository_id,
             service_id=service.id,
             path=f.suspected_path,
             line=f.suspected_line,
-            signal=f.signal,
-            fingerprint=finding_fingerprint(service.id, f.signal or f.title, f.category),
+            signal=signal,
+            fingerprint=finding_fingerprint(service.id, signal or f.title, f.category),
             evidence_strength=strength,
             extra={
                 "suggested_next_investigation": f.suggested_next_investigation,
@@ -413,9 +475,16 @@ class InferenceOrchestrator:
         session.flush()
         return finding
 
+    @staticmethod
+    def _cited(cited: list[str], refs: dict[str, str]) -> list[str]:
+        """The distinct input refs behind a model's citations. Refs that were not in the input
+        are dropped, and repeating one ref does not make the evidence any stronger."""
+        return list(dict.fromkeys(refs[r] for r in cited if r in refs))
+
     def _finding_from_lead(
         self, session: Session, run: InferenceRun, service: Service, lead: Lead
     ) -> Finding:
+        lead_refs = list(dict.fromkeys(lead.evidence_refs))
         finding = Finding(
             tenant_id=run.tenant_id,
             project_id=run.project_id,
@@ -427,13 +496,13 @@ class InferenceOrchestrator:
             description=f"{lead.hypothesis}\n\n{lead.context[-800:]}",
             severity="medium",
             confidence=0.6,
-            evidence_refs=lead.evidence_refs[-MAX_LEAD_REFS:],
+            evidence_refs=lead_refs[-MAX_LEAD_REFS:],
             repository_id=service.repository_id,
             service_id=service.id,
             path=lead.suspected_path,
             signal=lead.signal,
             fingerprint=finding_fingerprint(service.id, lead.signal or lead.title, "fix"),
-            evidence_strength=0.5 + 0.25 * min(len(lead.evidence_refs), 6),
+            evidence_strength=0.5 + 0.25 * min(len(lead_refs), 6),
         )
         session.add(finding)
         session.flush()

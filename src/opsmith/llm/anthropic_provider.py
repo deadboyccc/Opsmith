@@ -56,22 +56,28 @@ class AnthropicProvider:
             output_config={"effort": request.effort},
             **fallback_kwargs(),
         )
-        if response.stop_reason == "refusal":
-            details = getattr(response, "stop_details", None)
-            category = getattr(details, "category", None) if details else None
-            raise LLMRefusal(f"model declined stage {request.stage} (category={category})")
-        if response.stop_reason == "max_tokens":
-            raise LLMOutputError(f"stage {request.stage}: output truncated at max_tokens")
-        usage = response.usage
-        parsed = getattr(response, "parsed_output", None)
-        if parsed is not None:
-            data: dict[str, Any] | str = parsed.model_dump(mode="json")
-        else:
-            data = next((b.text for b in response.content if b.type == "text"), "")
-        return ProviderResponse(
-            data=data,
+        usage = getattr(response, "usage", None)
+        billed = ProviderResponse(
+            data="",
             input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
             output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
             cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
             model=str(getattr(response, "model", request.model) or request.model),
         )
+        if response.stop_reason in {"refusal", "max_tokens"}:
+            # The API billed these responses; the error carries the usage to the gateway.
+            error: LLMError
+            if response.stop_reason == "refusal":
+                details = getattr(response, "stop_details", None)
+                category = getattr(details, "category", None) if details else None
+                error = LLMRefusal(f"model declined stage {request.stage} (category={category})")
+            else:
+                error = LLMOutputError(f"stage {request.stage}: output truncated at max_tokens")
+            error.usage = billed
+            raise error
+        parsed = getattr(response, "parsed_output", None)
+        if parsed is not None:
+            billed.data = parsed.model_dump(mode="json")
+        else:
+            billed.data = next((b.text for b in response.content if b.type == "text"), "")
+        return billed

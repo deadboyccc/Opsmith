@@ -20,13 +20,15 @@ from sqlalchemy.orm import Session
 from opsmith.db import utcnow
 from opsmith.llm.base import (
     BudgetExceeded,
+    LLMError,
     LLMOutputError,
     LLMProvider,
     ProviderNotAllowed,
     ProviderRequest,
+    ProviderResponse,
 )
 from opsmith.llm.pricing import cost_usd
-from opsmith.llm.prompts import get_prompt
+from opsmith.llm.prompts import corrective_retry, get_prompt
 from opsmith.models import Project, UsageRecord
 from opsmith.observability import METRICS
 from opsmith.redaction import Redactor
@@ -76,13 +78,23 @@ class BudgetGuard:
         ).one()
         return int(row[0]), float(row[1])
 
-    def check(self, run_id: str | None, estimated_tokens: int) -> None:
+    def check(
+        self,
+        run_id: str | None,
+        estimated_tokens: int,
+        *,
+        call_tokens: int = 0,
+        call_cost: float = 0.0,
+    ) -> None:
+        """``call_tokens``/``call_cost``: what the current gateway call has already spent. They
+        stand in for the run's recorded usage when there is no ``run_id`` to look it up by, so
+        the per-run caps also bound a corrective retry of a run-less stage."""
         if self.spent_today() >= self.budgets.max_cost_per_day_usd:
             raise BudgetExceeded(
                 f"project {self.project.name}: daily LLM budget "
                 f"${self.budgets.max_cost_per_day_usd:.2f} exhausted"
             )
-        tokens, cost = self.run_usage(run_id)
+        tokens, cost = self.run_usage(run_id) if run_id else (call_tokens, call_cost)
         if tokens + estimated_tokens > self.budgets.max_tokens_per_run:
             raise BudgetExceeded(
                 f"run {run_id}: token cap {self.budgets.max_tokens_per_run} would be exceeded"
@@ -107,6 +119,13 @@ class LLMGateway:
             allowed &= set(settings.llm.provider_allowlist)
         return allowed
 
+    @staticmethod
+    def redactor(settings: ProjectSettings) -> Redactor:
+        """The redactor applied to everything sent to a provider. A caller that matches model
+        output against identifiers it sent (evidence refs, signals) must compare against their
+        redacted form, because that is the only form the model ever saw."""
+        return Redactor(settings.redaction_extra_patterns)
+
     def structured(
         self,
         session: Session,
@@ -126,12 +145,16 @@ class LLMGateway:
             )
         provider = self.providers[cfg.provider]
         # Defence in depth: ETL already redacted, but nothing leaves unredacted.
-        redactor = Redactor(settings.redaction_extra_patterns)
-        safe_vars = redactor.redact(variables)
+        safe_vars = self.redactor(settings).redact(variables)
         prompt = get_prompt(prompt_id)
         system, user = prompt.render(safe_vars)
         guard = BudgetGuard(session, project)
-        guard.check(run_id, (len(system) + len(user)) // 4 + cfg.max_tokens // 4)
+
+        def worst_case_tokens(user_text: str) -> int:
+            # ~4 characters per input token, plus the whole output allowance (already tokens).
+            return (len(system) + len(user_text)) // 4 + cfg.max_tokens
+
+        guard.check(run_id, worst_case_tokens(user))
 
         request = ProviderRequest(
             stage=stage,
@@ -148,22 +171,16 @@ class LLMGateway:
         total_cost = 0.0
         last_error: str | None = None
         model_used = cfg.model
-        for attempt in range(2):
-            if attempt == 1:
-                guard.check(run_id, (len(system) + len(request.user)) // 4)
-            started = time.perf_counter()
-            response = provider.complete(request)
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            model_used = response.model or cfg.model
+
+        def record(response: ProviderResponse, latency_ms: int) -> tuple[str, float]:
+            model = response.model or cfg.model
             call_cost = cost_usd(
-                model_used,
+                model,
                 response.input_tokens,
                 response.output_tokens,
                 response.cache_read_tokens,
+                fallback_model=cfg.model,
             )
-            total_in += response.input_tokens
-            total_out += response.output_tokens
-            total_cost += call_cost
             session.add(
                 UsageRecord(
                     tenant_id=project.tenant_id,
@@ -171,7 +188,7 @@ class LLMGateway:
                     stage=stage,
                     run_id=run_id,
                     provider=provider.name,
-                    model=model_used,
+                    model=model,
                     input_tokens=response.input_tokens,
                     output_tokens=response.output_tokens,
                     cost_usd=call_cost,
@@ -182,6 +199,28 @@ class LLMGateway:
             METRICS.inc("opsmith_llm_calls_total", stage=stage, provider=provider.name)
             METRICS.inc("opsmith_llm_cost_usd_total", call_cost, stage=stage)
             METRICS.observe("opsmith_llm_latency_seconds", latency_ms / 1000, stage=stage)
+            return model, call_cost
+
+        for attempt in range(2):
+            if attempt == 1:
+                guard.check(
+                    run_id,
+                    worst_case_tokens(request.user),
+                    call_tokens=total_in + total_out,
+                    call_cost=total_cost,
+                )
+            started = time.perf_counter()
+            try:
+                response = provider.complete(request)
+            except LLMError as exc:
+                # A refusal or truncation was still billed: record it, then let it surface.
+                if exc.usage is not None:
+                    record(exc.usage, int((time.perf_counter() - started) * 1000))
+                raise
+            model_used, call_cost = record(response, int((time.perf_counter() - started) * 1000))
+            total_in += response.input_tokens
+            total_out += response.output_tokens
+            total_cost += call_cost
             try:
                 data = response.data
                 parsed = (
@@ -194,10 +233,7 @@ class LLMGateway:
                 log.warning(
                     "LLM output failed validation", extra={"stage": stage, "attempt": attempt}
                 )
-                request.user = (
-                    f"{user}\n\nYour previous response failed schema validation:\n{last_error}\n"
-                    "Return corrected JSON only."
-                )
+                request.user = corrective_retry(user, last_error)
                 continue
             return LLMResult(
                 output=parsed,
