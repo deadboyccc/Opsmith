@@ -25,7 +25,7 @@ from opsmith.executor.agents import (
 from opsmith.executor.service import AgentFactory, ExecutionService
 from opsmith.inference.orchestrator import InferenceOrchestrator
 from opsmith.llm import ChatClient, LLMError, LLMGateway, ProviderNotAllowed, default_gateway
-from opsmith.models import Job
+from opsmith.models import Connector, Job, Project, Repository, Service, Task
 from opsmith.queue import Handler, Worker
 from opsmith.review import ReviewService
 from opsmith.scheduler import Scheduler
@@ -67,6 +67,30 @@ def default_agent_factories(settings: Settings, gateway: LLMGateway) -> dict[str
         )
 
     return {"heuristic": lambda _ps: HeuristicAgent(), "claude": claude, "openai": openai}
+
+
+# What a job's payload names, in the order tried, to find the project the job belongs to.
+_JOB_TARGETS: tuple[tuple[str, type[Any]], ...] = (
+    ("project_id", Project),
+    ("connector_id", Connector),
+    ("service_id", Service),
+    ("repository_id", Repository),
+    ("task_id", Task),
+)
+
+
+def _project_of(session: Session, job: Job) -> str | None:
+    """The project a job works for, so that its failure reaches that project's notification
+    channels. Most payloads name a connector, service, repository or task rather than the
+    project. Only rows of the job's own tenant count."""
+    for key, model in _JOB_TARGETS:
+        target_id = job.payload.get(key)
+        if not isinstance(target_id, str):
+            continue
+        row = session.get(model, target_id)
+        if row is not None and row.tenant_id == job.tenant_id:
+            return str(row.id if model is Project else row.project_id)
+    return None
 
 
 class Platform:
@@ -178,11 +202,10 @@ class Platform:
     def _on_dead(session: Session, job: Job) -> None:
         if job.kind == "notify":  # don't notify about failed notifications (loop guard)
             return
-        project_id = job.payload.get("project_id")
         notifications.notify(
             session,
             tenant_id=job.tenant_id,
-            project_id=project_id,
+            project_id=_project_of(session, job),
             event="job.dead",
             subject=f"Pipeline job failed: {job.kind}",
             body=(job.last_error or "")[:1000],

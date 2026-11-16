@@ -295,6 +295,8 @@ class Worker:
         job.status = "dead"
         job.finished_at = utcnow()
         job.last_error = error[:4000]
+        job.locked_by = None  # a dead job is nobody's, whichever path brought it here
+        job.lease_expires_at = None
         audit_log.record(
             s,
             tenant_id=job.tenant_id,

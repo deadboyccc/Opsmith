@@ -5,9 +5,10 @@ from sqlalchemy import select
 
 from opsmith import queue
 from opsmith.db import utcnow
-from opsmith.models import AuditLog, Job, Notification, Schedule
+from opsmith.models import AuditLog, Job, Notification, Schedule, Task
 from opsmith.queue import PermanentFailure, RetryLater, Worker
 from opsmith.scheduler import CronExpr, Scheduler, upsert_schedule
+from opsmith.security import create_tenant
 
 
 def test_cron_parsing_and_next() -> None:
@@ -159,3 +160,70 @@ def test_a_worker_that_lost_its_lease_leaves_the_job_to_its_new_owner(
         job = s.get(Job, job_id)
         assert (job.status, job.locked_by, job.deferrals) == ("running", "B", 0)
     assert Worker(db, {"x": handler}, worker_id="C")._claim() is None
+
+
+@pytest.mark.parametrize("kind", ["ingest", "inference", "audit", "execute", "verify"])
+def test_a_dead_job_notifies_its_project(platform, seed, kind) -> None:
+    """Only three job kinds carry ``project_id``. For every other kind the ``job.dead``
+    notification had no project, so it was logged and never reached the project's channels."""
+    with platform.db.session() as s:
+        task = Task(tenant_id=seed.tenant.id, project_id=seed.project.id, title="t", category="fix")
+        s.add(task)
+        s.flush()
+        payload = {
+            "ingest": {"connector_id": seed.log_connector.id},
+            "inference": {"service_id": seed.service.id},
+            "audit": {"repository_id": seed.repo.id},
+            "execute": {"task_id": task.id, "review_id": "rev_x"},
+            "verify": {"task_id": task.id},
+        }[kind]
+        queue.enqueue(
+            s, tenant_id=seed.tenant.id, kind=kind, payload=payload, idempotency_key=f"dead-{kind}"
+        )
+
+    def fail(_s, _job):
+        raise PermanentFailure("no")
+
+    worker = Worker(platform.db, {kind: fail}, kinds={kind}, on_dead=platform._on_dead)
+    assert worker.run_once().status == "dead"
+    with platform.db.session() as s:
+        note = s.scalars(select(Notification).where(Notification.event == "job.dead")).one()
+        assert note.project_id == seed.project.id
+
+
+def test_a_dead_job_of_another_tenant_does_not_borrow_a_project(platform, seed) -> None:
+    """The project is looked up within the job's own tenant only."""
+    with platform.db.session() as s:
+        other = create_tenant(s, "other")
+        queue.enqueue(
+            s,
+            tenant_id=other.id,
+            kind="ingest",
+            payload={"connector_id": seed.log_connector.id},
+            idempotency_key="foreign",
+        )
+
+    def fail(_s, _job):
+        raise PermanentFailure("no")
+
+    worker = Worker(platform.db, {"ingest": fail}, kinds={"ingest"}, on_dead=platform._on_dead)
+    assert worker.run_once().status == "dead"
+    with platform.db.session() as s:
+        note = s.scalars(select(Notification).where(Notification.event == "job.dead")).one()
+        assert note.project_id is None
+
+
+def test_a_job_deferred_too_often_releases_its_lease(platform, seed, monkeypatch) -> None:
+    monkeypatch.setattr(queue, "MAX_DEFERRALS", 0)
+
+    def wait(_s, _job):
+        raise RetryLater(1, "busy")
+
+    with platform.db.session() as s:
+        job_id = queue.enqueue(
+            s, tenant_id=seed.tenant.id, kind="t", payload={}, idempotency_key="d"
+        ).id
+    assert _worker(platform, wait).run_once().status == "dead"
+    with platform.db.session() as s:
+        job = s.get(Job, job_id)
+        assert (job.status, job.locked_by, job.lease_expires_at) == ("dead", None, None)
