@@ -42,7 +42,7 @@ docker-dev: ## Build the dev image
 	docker build --target dev -t $(DEV_IMAGE) .
 
 docker-test: docker-dev ## Run lint, types and tests inside the dev image
-	docker run --rm $(DEV_IMAGE) sh -c "ruff check src tests && ruff format --check src tests && mypy && pytest -q --cov"
+	docker run --rm $(DEV_IMAGE) sh -c "ruff check src tests scripts && ruff format --check src tests scripts && mypy && pytest -q --cov && python scripts/check_docs.py"
 
 clean: ## Remove local artifacts
 	rm -rf data opsmith-demo .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

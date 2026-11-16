@@ -15,7 +15,7 @@ come with.
 ```bash
 uv sync --all-extras
 make check                          # everything CI runs: ruff, format check, mypy, tests with coverage
-uv run pytest -q                    # tests only, about a minute
+uv run pytest -q                    # tests only, two to three minutes
 uv run pytest tests/test_llm.py -q  # one area while you iterate
 uv run pytest -k "budget" -q        # by name
 ```
