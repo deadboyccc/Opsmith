@@ -4,7 +4,7 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
-## Unreleased
+## 1.2.0 - 2026-11-16
 
 ### Security
 
