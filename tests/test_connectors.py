@@ -5,7 +5,9 @@ import httpx
 import pytest
 
 from opsmith.connectors import ConnectorError, available_types, build_connector
+from opsmith.db import utcnow
 from opsmith.localfs import LocalAccessError
+from opsmith.models import Connector
 
 START = datetime(2026, 3, 1, tzinfo=UTC)
 END = START + timedelta(hours=1)
@@ -477,3 +479,27 @@ def test_prometheus_skips_bad_samples_and_keeps_infinity_for_the_pipeline() -> N
             {"url": "http://10.0.0.5", "queries": [{"name": "no promql"}]},
             http=_client(_unreachable),
         ).fetch(START, END, {})
+
+
+def test_push_only_connectors_accept_pushes_and_poll_nothing(platform, seed, drain) -> None:
+    """A collector needs a connector to push to. The push types need no host files and no
+    URL, and their scheduled poll is a harmless no-op (not a failing job)."""
+    assert available_types()["push_logs"] == "logs"
+    assert available_types()["push_metrics"] == "metrics"
+    with platform.db.session() as s:
+        conn = Connector(
+            tenant_id=seed.tenant.id,
+            project_id=seed.project.id,
+            name="collector",
+            type="push_logs",
+            kind="logs",
+            service_id=seed.service.id,
+        )
+        s.add(conn)
+        s.flush()
+        connector_id = conn.id
+        polled = platform.ingestion.run_connector(s, connector_id)
+        assert polled["records"] == 0
+        record = {"timestamp": utcnow().isoformat(), "service": "payments-api", "message": "hi"}
+        batches = platform.ingestion.ingest_push(s, s.get(Connector, connector_id), [record])
+        assert sum(b.record_count for b in batches) == 1
