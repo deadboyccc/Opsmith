@@ -218,3 +218,25 @@ def test_closed_pr_closes_task(platform, seed, drain) -> None:
         )
         platform.tracker.run(s, seed.project.id)
         assert t.status == "closed"
+
+
+@pytest.mark.parametrize(("late", "expected"), [("failure", "failure"), (None, "pending")])
+def test_github_ci_reads_every_page_of_check_runs(gh_token, late, expected) -> None:
+    """GitHub returns check runs 30 to a page. Only the first page was read, so a commit whose
+    failing or unfinished run was listed later was reported as passing."""
+    runs = [{"status": "completed", "conclusion": "success"} for _ in range(149)]
+    runs.append({"status": "completed" if late else "in_progress", "conclusion": late})
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls/7"):
+            return httpx.Response(200, json={"state": "open", "head": {"sha": "abc"}})
+        size = int(request.url.params.get("per_page", 30))
+        page = int(request.url.params.get("page", 1))
+        pages.append(page)
+        chunk = runs[(page - 1) * size : page * size]
+        return httpx.Response(200, json={"total_count": len(runs), "check_runs": chunk})
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert scm.get_pull_request(gh_repo(), 7).ci == expected
+    assert pages == [1, 2]

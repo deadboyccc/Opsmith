@@ -23,6 +23,9 @@ from opsmith.scm.base import (
     check_pushable,
 )
 
+CHECK_RUNS_PER_PAGE = 100  # GitHub's maximum
+MAX_CHECK_RUN_PAGES = 10  # a bound on the requests one poll makes
+
 
 class GitHubSCM(SCMProvider):
     name = "github"
@@ -152,9 +155,28 @@ class GitHubSCM(SCMProvider):
             review_comments=int(pr.get("review_comments", 0)),
         )
 
+    def _check_runs(self, repo: Repository, fn: str, sha: str) -> list[dict[str, Any]]:
+        """Every check run of a commit. The list is paginated; judging the first page alone
+        reports a commit as passing while a later page holds its failing or unfinished run."""
+        runs: list[dict[str, Any]] = []
+        for page in range(1, MAX_CHECK_RUN_PAGES + 1):
+            resp = self._request(
+                repo,
+                "GET",
+                f"/repos/{fn}/commits/{sha}/check-runs",
+                params={"per_page": CHECK_RUNS_PER_PAGE, "page": page},
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            batch = data.get("check_runs") or []
+            runs += batch
+            if len(batch) < CHECK_RUNS_PER_PAGE or len(runs) >= int(data.get("total_count") or 0):
+                break
+        return runs
+
     def _ci(self, repo: Repository, fn: str, sha: str) -> str:
-        runs_resp = self._request(repo, "GET", f"/repos/{fn}/commits/{sha}/check-runs")
-        runs = runs_resp.json().get("check_runs", []) if runs_resp.status_code == 200 else []
+        runs = self._check_runs(repo, fn, sha)
         if runs:
             if any(r.get("status") != "completed" for r in runs):
                 return "pending"
