@@ -457,3 +457,40 @@ def test_claude_agent_survives_a_tool_input_that_is_not_an_object(
     assert res.summary == "gave up"
     assert res.input_tokens == 2000
     assert client.calls[1]["messages"][-1]["content"][0]["is_error"] is True
+
+
+def test_overlapping_execution_is_audited_when_it_waits(platform, seed) -> None:
+    """The ``execution.serialized`` audit entry was written in the transaction that the
+    deferral then rolled back, so it never existed."""
+    first = make_task(platform, seed)
+    second = make_task(platform, seed, fp="fp-other", rule="py.eval", category="security", line=50)
+    with platform.db.session() as s:
+        t1 = s.get(Task, first)
+        transition_task(s, t1, "approved")
+        transition_task(s, t1, "executing")
+    rev = approve(platform, seed, second)
+    for _ in range(2):  # waiting twice is still one audit entry
+        with pytest.raises(queue.RetryLater, match="same files"):
+            platform.executor.execute(second, rev)
+    with platform.db.session() as s:
+        entries = s.scalars(
+            select(AuditLog).where(
+                AuditLog.entity_id == second, AuditLog.action == "execution.serialized"
+            )
+        ).all()
+    assert len(entries) == 1
+    assert entries[0].details["conflicts_with"] == first
+
+
+def test_unusable_work_dir_returns_the_task_to_review(platform, seed, drain, tmp_path) -> None:
+    """A work directory that cannot be created used to raise out of the execution, leaving
+    the task in ``executing`` for good once the job was dead."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    platform.executor.settings.work_dir = blocker / "work"
+    task_id = make_task(platform, seed)
+    approve(platform, seed, task_id)
+    drain()
+    t = task(platform, task_id)
+    assert t.status == "in_review"
+    assert t.execution_report["error"].startswith("infrastructure:")

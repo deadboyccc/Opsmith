@@ -56,6 +56,7 @@ from opsmith.gitutil import (
 )
 from opsmith.llm import BudgetExceeded, BudgetGuard
 from opsmith.models import (
+    AuditLog,
     ExecutionRun,
     Finding,
     Project,
@@ -91,6 +92,15 @@ def latest_review(session: Session, task_id: str) -> Review | None:
 
 class ApprovalSuperseded(ApprovalError):
     """A newer approval exists; its own execute job carries the work."""
+
+
+class Serialized(queue.RetryLater):
+    """Another execution is changing the same files; this one waits for it."""
+
+    def __init__(self, other: str, paths: list[str]) -> None:
+        super().__init__(120, f"waiting for {other} (same files)")
+        self.other = other
+        self.paths = paths
 
 
 def assert_approved(session: Session, task: Task, review_id: str | None = None) -> Review:
@@ -167,6 +177,44 @@ class ExecutionService:
 
     # ------------------------------------------------------------------ entry point
     def execute(self, task_id: str, review_id: str) -> dict[str, Any]:
+        try:
+            return self._execute(task_id, review_id)
+        except Serialized as wait:
+            # Recorded here, in its own transaction: the one the deferral was raised in is
+            # rolled back, and the entry would go with it.
+            self._audit_serialized(task_id, review_id, wait)
+            raise
+
+    def _audit_serialized(self, task_id: str, review_id: str, wait: Serialized) -> None:
+        """One entry per approval and conflicting task, however often the job comes back."""
+        with self.db.session() as s:
+            task = s.get(Task, task_id)
+            assert task is not None
+            earlier = s.scalars(
+                select(AuditLog).where(
+                    AuditLog.tenant_id == task.tenant_id,
+                    AuditLog.entity_type == "task",
+                    AuditLog.entity_id == task.id,
+                    AuditLog.action == "execution.serialized",
+                )
+            ).all()
+            details = {"review_id": review_id, "conflicts_with": wait.other, "paths": wait.paths}
+            if any(
+                e.details.get("review_id") == review_id
+                and e.details.get("conflicts_with") == wait.other
+                for e in earlier
+            ):
+                return
+            audit_log.record(
+                s,
+                tenant_id=task.tenant_id,
+                entity_type="task",
+                entity_id=task.id,
+                action="execution.serialized",
+                details=details,
+            )
+
+    def _execute(self, task_id: str, review_id: str) -> dict[str, Any]:
         with self.db.session() as s:
             task = s.get(Task, task_id)
             if task is None:
@@ -247,15 +295,7 @@ class ExecutionService:
         for other in running:
             overlap = mine & set(other.paths)
             if overlap and other.repository_id == task.repository_id:
-                audit_log.record(
-                    s,
-                    tenant_id=task.tenant_id,
-                    entity_type="task",
-                    entity_id=task.id,
-                    action="execution.serialized",
-                    details={"conflicts_with": other.id, "paths": sorted(overlap)[:10]},
-                )
-                raise queue.RetryLater(120, f"waiting for {other.id} (same files)")
+                raise Serialized(other.id, sorted(overlap)[:10])
 
     # ------------------------------------------------------------------ runs
     def _start_run(self, task_id: str, review_id: str, attempt: int) -> str:
@@ -333,9 +373,7 @@ class ExecutionService:
             return AttemptOutcome(False, False, policy)
         if not BRANCH_NAME.fullmatch(branch) or branch == repo.default_branch:
             return AttemptOutcome(False, False, f"refusing to use branch name {branch!r}")
-        if self.settings.work_dir is not None:
-            self.settings.work_dir.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix="opsmith-exec-", dir=self.settings.work_dir))
+        tmp: Path | None = None
         steps: list[dict[str, Any]] = []
         result: AgentResult | None = None
         sandbox_id: str | None = None
@@ -347,6 +385,12 @@ class ExecutionService:
             )
 
         try:
+            # Inside the try: a work directory that cannot be created (wrong path, full disk,
+            # missing permission) must fail the attempt and return the task to review, not
+            # raise out of the job and leave the task in ``executing``.
+            if self.settings.work_dir is not None:
+                self.settings.work_dir.mkdir(parents=True, exist_ok=True)
+            tmp = Path(tempfile.mkdtemp(prefix="opsmith-exec-", dir=self.settings.work_dir))
             scm = self.scm.for_provider(repo.scm_provider)
             workdir = scm.checkout(repo, tmp / "repo")
             # The checkout's remote is removed so the sandboxed agent holds no SCM handle.
@@ -497,7 +541,8 @@ class ExecutionService:
             log.exception("execution attempt crashed", extra={"task_id": task_id})
             return fail(f"error: {type(exc).__name__}: {exc}")
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     def _cost_allowance(self, task_id: str, settings: ProjectSettings) -> float:
         """What a model-driven agent may spend on this attempt: the per-run cap, or what is
