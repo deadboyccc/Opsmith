@@ -47,6 +47,14 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC)
 
 
+# The row lock that serializes work on one project or service. ``FOR NO KEY UPDATE`` on
+# PostgreSQL: it excludes another holder exactly like ``FOR UPDATE``, but not the
+# ``FOR KEY SHARE`` a foreign-key check takes, so rows that reference the locked one can still
+# be inserted while it is held (ingestion and reviews go on during a long model call).
+# SQLite, which has no row locks, ignores it.
+SERIALIZE: dict[str, bool] = {"key_share": True}
+
+
 class Base(DeclarativeBase):
     type_annotation_map = {
         dict[str, Any]: JSON,

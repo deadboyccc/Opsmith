@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from opsmith import audit_log, notifications, queue
 from opsmith.audit_log import ACTIVE_LEAD_STATES, transition_lead
-from opsmith.db import new_id, utcnow
+from opsmith.db import SERIALIZE, new_id, utcnow
 from opsmith.llm import BudgetExceeded, LLMError, LLMGateway
 from opsmith.models import AnalysisBundle, Finding, InferenceRun, Lead, Project, Service, Task
 from opsmith.observability import METRICS
@@ -65,7 +65,7 @@ class InferenceOrchestrator:
     def run(self, session: Session, service_id: str, slot: str) -> InferenceRun | None:
         # One run per service at a time: two runs (a manual trigger and a scheduled one) would
         # both read the service's open leads and age or confirm them twice.
-        service = session.get(Service, service_id, with_for_update=True)
+        service = session.get(Service, service_id, with_for_update=SERIALIZE)
         if service is None:
             raise queue.PermanentFailure(f"service {service_id} not found")
         existing = session.scalar(

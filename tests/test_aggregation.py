@@ -441,3 +441,54 @@ def test_concurrent_aggregations_of_a_project_create_each_task_once(
         counts = Counter(fp.fingerprint for fp in s.scalars(select(TaskFingerprint)))
     assert counts
     assert max(counts.values()) == 1
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def test_ingestion_is_not_blocked_while_a_project_is_aggregated(
+    platform, seed, database_url: str, monkeypatch
+) -> None:
+    """The per-project lock was ``FOR UPDATE``, which also blocks every insert of a row that
+    references the project (a foreign-key check takes ``FOR KEY SHARE`` on it). While a model
+    drafted tasks, for minutes, nothing could be ingested, analysed or reviewed in that
+    project. The same held for a service during its inference run."""
+    if not database_url.startswith("postgresql"):
+        pytest.skip("row locks: PostgreSQL only")
+    from sqlalchemy import text  # noqa: PLC0415
+
+    with platform.db.session() as s:
+        add_finding(s, seed, fp="fp-lock")
+    holding, release = threading.Event(), threading.Event()
+    draft = Aggregator._draft
+
+    def slow_draft(self, session, project, group):
+        holding.set()
+        release.wait(timeout=30)
+        return draft(self, session, project, group)
+
+    monkeypatch.setattr(Aggregator, "_draft", slow_draft)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            with platform.db.session() as s:
+                platform.aggregator.run(s, seed.project.id)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert holding.wait(timeout=30)
+        with platform.db.session() as s:
+            s.execute(text("SET LOCAL lock_timeout = '3s'"))
+            add_finding(s, seed, fp="fp-during")  # references the locked project
+        with platform.db.session() as s:  # a second aggregation still has to wait its turn
+            s.execute(text("SET LOCAL lock_timeout = '1s'"))
+            with pytest.raises(Exception, match="lock timeout"):
+                platform.aggregator.run(s, seed.project.id)
+    finally:
+        release.set()
+        worker.join(timeout=60)
+    assert errors == []

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from opsmith import audit_log, notifications
 from opsmith.aggregation.scoring import noisy_or, priority_for, score
 from opsmith.audit_log import DONE_TASK_STATES, OPEN_TASK_STATES, transition_task
-from opsmith.db import new_id, utcnow
+from opsmith.db import SERIALIZE, new_id, utcnow
 from opsmith.llm import HeuristicProvider, LLMError, LLMGateway
 from opsmith.llm.base import ProviderRequest
 from opsmith.models import (
@@ -180,7 +180,7 @@ class Aggregator:
         # One aggregation per project at a time: two workers reading the same `new` findings
         # would both find no task for them and draft two. The second waits here, then finds
         # them taken. (SQLite serializes writers anyway.)
-        project = session.get(Project, project_id, with_for_update=True)
+        project = session.get(Project, project_id, with_for_update=SERIALIZE)
         assert project is not None
         settings = ProjectSettings.model_validate(project.settings)
         new = session.scalars(
@@ -285,6 +285,9 @@ class Aggregator:
         task = self._existing_task(session, project.id, group)
         if task is None:
             return "new"
+        # Locked and re-read, like a review does: an approval of this task that is in flight
+        # either finishes first (the task is then frozen, below) or waits for this change.
+        session.refresh(task, with_for_update=SERIALIZE)
         if task.status in FROZEN_TASK_STATES:
             return "deferred"  # findings stay `new`; attached once the execution is over
         if task.status in OPEN_TASK_STATES or task.status == "regressed":
