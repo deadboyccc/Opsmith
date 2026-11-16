@@ -28,8 +28,17 @@ class Settings(BaseModel):
     data_dir: Path = Field(default=Path("./data"))
     database_url: str = ""
     # LLM providers that may receive data at all (data-residency / provider allowlist).
-    llm_provider_allowlist: list[str] = Field(default_factory=lambda: ["heuristic", "anthropic"])
+    llm_provider_allowlist: list[str] = Field(
+        default_factory=lambda: ["heuristic", "anthropic", "openai"]
+    )
     anthropic_api_key_ref: str = "env:ANTHROPIC_API_KEY"
+    # The "openai" provider: any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure
+    # OpenAI, Ollama, vLLM, LM Studio, LiteLLM, OpenRouter, ...). A local server needs no key.
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key_ref: str = "env:OPENAI_API_KEY"
+    # How structured output is requested: "json_schema" (falls back automatically when the
+    # server rejects it) or "json_object" for servers that only support plain JSON mode.
+    openai_json_mode: Literal["json_schema", "json_object"] = "json_schema"
     # Executor sandbox backend. "docker" isolates (no network, read-only root, dropped
     # capabilities). "local" is an unconfined subprocess for development and the demo only;
     # the executor refuses to use it for repositories outside the local SCM provider.
@@ -73,8 +82,13 @@ class Settings(BaseModel):
         return cls(
             data_dir=Path(_env("DATA_DIR", "./data")),
             database_url=_env("DATABASE_URL", ""),
-            llm_provider_allowlist=_env_list("LLM_PROVIDER_ALLOWLIST", "heuristic,anthropic"),
+            llm_provider_allowlist=_env_list(
+                "LLM_PROVIDER_ALLOWLIST", "heuristic,anthropic,openai"
+            ),
             anthropic_api_key_ref=_env("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY"),
+            openai_base_url=_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            openai_api_key_ref=_env("OPENAI_API_KEY_REF", "env:OPENAI_API_KEY"),
+            openai_json_mode=_env("OPENAI_JSON_MODE", "json_schema"),
             sandbox_backend=_env("SANDBOX_BACKEND", "docker"),
             sandbox_image=_env("SANDBOX_IMAGE", "python:3.12-slim"),
             work_dir=Path(_env("WORK_DIR", "")) if _env("WORK_DIR", "") else None,
@@ -120,8 +134,16 @@ _RESERVED_ENV = frozenset({"POSTGRES_PASSWORD", "PGPASSWORD", "DATABASE_URL"})
 
 
 def _reserved_env_names() -> frozenset[str]:
-    scheme, _, name = _env("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY").partition(":")
-    return _RESERVED_ENV | ({name} if scheme == "env" else set())
+    """The model providers' API keys, wherever the operator has pointed them."""
+    names = set(_RESERVED_ENV)
+    for setting, default in (
+        ("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY"),
+        ("OPENAI_API_KEY_REF", "env:OPENAI_API_KEY"),
+    ):
+        scheme, _, name = _env(setting, default).partition(":")
+        if scheme == "env":
+            names.add(name)
+    return frozenset(names)
 
 
 def secrets_dir() -> Path:

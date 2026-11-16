@@ -107,6 +107,24 @@ class StageModel(BaseModel):
     model: str = "heuristic-v1"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     max_tokens: int = Field(default=16000, gt=0)
+    # USD per million tokens, for cost accounting and the cost budgets. Optional: Opsmith has
+    # list prices for the Claude models, and costs any other model at the most expensive rate
+    # it knows, so a budget is never bypassed by an unpriced model. Set these to the real
+    # rates of your model; use 0 for a local model.
+    input_price_per_mtok: float | None = Field(default=None, ge=0)
+    output_price_per_mtok: float | None = Field(default=None, ge=0)
+
+    @property
+    def prices(self) -> tuple[float, float] | None:
+        if self.input_price_per_mtok is None or self.output_price_per_mtok is None:
+            return None
+        return self.input_price_per_mtok, self.output_price_per_mtok
+
+    @model_validator(mode="after")
+    def _both_prices(self) -> StageModel:
+        if (self.input_price_per_mtok is None) != (self.output_price_per_mtok is None):
+            raise ValueError("set both input_price_per_mtok and output_price_per_mtok, or neither")
+        return self
 
 
 class LLMSettings(BaseModel):

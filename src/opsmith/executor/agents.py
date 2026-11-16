@@ -1,15 +1,20 @@
 """Coding subagents.
 
-* ``ClaudeCodingAgent`` - Claude in a manual tool-use loop over a *fixed* tool set
-  (list/read/write/replace files, run a configured check by name, finish). It cannot run
-  arbitrary commands, reach the network, or change its own tools/permissions.
+Every agent works through the same *fixed* tool set (list/read/write/replace files, run a
+configured check by name, finish). None can run arbitrary commands, reach the network, or
+change its own tools or permissions.
+
 * ``HeuristicAgent`` - deterministic codemods for well-understood audit rules. Lets the full
   loop run offline (demo, CI) and is a cheap first pass for trivial fixes.
+* ``ClaudeCodingAgent`` - Claude, through the Anthropic SDK.
+* ``OpenAICodingAgent`` - any model behind an OpenAI-compatible endpoint that supports tool
+  calling (OpenAI, Azure OpenAI, Ollama, vLLM, LiteLLM, OpenRouter, ...).
 """
 
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -17,6 +22,7 @@ from typing import Any, Protocol
 
 from opsmith.executor.sandbox import Workspace, WorkspaceError
 from opsmith.llm.anthropic_provider import fallback_kwargs, make_client
+from opsmith.llm.openai_provider import ChatClient, usage_of
 from opsmith.llm.pricing import cost_usd
 from opsmith.llm.prompts import INJECTION_GUARD, untrusted_json
 
@@ -270,24 +276,7 @@ class ClaudeCodingAgent:
         return self._client
 
     def run(self, task: AgentTask, ws: Workspace, budget: AgentBudget) -> AgentResult:
-        brief = {
-            "title": task.title,
-            "category": task.category,
-            "problem_statement": task.problem_statement,
-            "proposed_approach": task.proposed_approach,
-            "acceptance_criteria": task.acceptance_criteria,
-            "paths": task.paths,
-            "findings": task.findings[:20],
-            "available_checks": sorted(ws.checks),
-        }
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": "Implement this approved task.\n<untrusted_data>\n"
-                + untrusted_json(brief, sort_keys=False)
-                + "\n</untrusted_data>",
-            }
-        ]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": task_brief(task, ws)}]
         steps: list[dict[str, Any]] = []
         tin = tout = 0
         cost = 0.0
@@ -327,7 +316,7 @@ class ClaudeCodingAgent:
             results: list[dict[str, Any]] = []
             finished: tuple[bool, str] | None = None
             for tu in tool_uses:
-                content, is_error = self._dispatch(ws, tu.name, tu.input)
+                content, is_error = dispatch_tool(ws, tu.name, tu.input)
                 steps.append(
                     {
                         "step": "tool",
@@ -352,26 +341,152 @@ class ClaudeCodingAgent:
                 return AgentResult(finished[0], finished[1][:2000], steps, tin, tout, cost)
         return AgentResult(False, "Iteration budget exhausted.", steps, tin, tout, cost)
 
+
+def dispatch_tool(ws: Workspace, name: str, args: Any) -> tuple[str, bool]:
+    """Run one tool call against the confined workspace: ``(result text, is_error)``.
+
+    The only place a model's tool request turns into an action, for every agent."""
+    if not isinstance(args, dict):
+        return "invalid tool input", True
+    try:
+        if name == "list_files":
+            return "\n".join(ws.list_files(str(args.get("path", ".")))), False
+        if name == "read_file":
+            return ws.read_file(str(args["path"])), False
+        if name == "write_file":
+            ws.write_file(str(args["path"]), str(args["content"]))
+            return "ok", False
+        if name == "replace_in_file":
+            ws.replace_in_file(str(args["path"]), str(args["old_text"]), str(args["new_text"]))
+            return "ok", False
+        if name == "run_check":
+            res = ws.run_check(str(args["name"]))
+            return f"exit_code={res.exit_code}\n{res.output[-8000:]}", False
+        if name == "finish":
+            return "acknowledged", False
+    except (WorkspaceError, KeyError, OSError) as exc:
+        return f"error: {exc}", True
+    return f"unknown tool {name}", True
+
+
+def task_brief(task: AgentTask, ws: Workspace) -> str:
+    """The first user message for a model-driven agent. Everything in a task derives from
+    logs, code or model output, so it is framed as untrusted data."""
+    brief = {
+        "title": task.title,
+        "category": task.category,
+        "problem_statement": task.problem_statement,
+        "proposed_approach": task.proposed_approach,
+        "acceptance_criteria": task.acceptance_criteria,
+        "paths": task.paths,
+        "findings": task.findings[:20],
+        "available_checks": sorted(ws.checks),
+    }
+    return (
+        "Implement this approved task.\n<untrusted_data>\n"
+        + untrusted_json(brief, sort_keys=False)
+        + "\n</untrusted_data>"
+    )
+
+
+# --------------------------------------------------------------------------- openai-compatible
+
+
+class OpenAICodingAgent:
+    """The same tool loop over the Chat Completions tool-calling protocol.
+
+    Needs a model that supports tool calling. Costs come from the prices configured on the
+    executor stage, because there is no price list for arbitrary endpoints.
+    """
+
+    name = "openai"
+
+    def __init__(
+        self,
+        *,
+        client: ChatClient,
+        model: str,
+        max_tokens: int = 16000,
+        prices: tuple[float, float] | None = None,
+    ) -> None:
+        self.client = client
+        self.model = model
+        self.max_tokens = max_tokens
+        self.prices = prices
+
     @staticmethod
-    def _dispatch(ws: Workspace, name: str, args: Any) -> tuple[str, bool]:
-        if not isinstance(args, dict):
-            return "invalid tool input", True
-        try:
-            if name == "list_files":
-                return "\n".join(ws.list_files(str(args.get("path", ".")))), False
-            if name == "read_file":
-                return ws.read_file(str(args["path"])), False
-            if name == "write_file":
-                ws.write_file(str(args["path"]), str(args["content"]))
-                return "ok", False
-            if name == "replace_in_file":
-                ws.replace_in_file(str(args["path"]), str(args["old_text"]), str(args["new_text"]))
-                return "ok", False
-            if name == "run_check":
-                res = ws.run_check(str(args["name"]))
-                return f"exit_code={res.exit_code}\n{res.output[-8000:]}", False
-            if name == "finish":
-                return "acknowledged", False
-        except (WorkspaceError, KeyError, OSError) as exc:
-            return f"error: {exc}", True
-        return f"unknown tool {name}", True
+    def _tools() -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                },
+            }
+            for tool in AGENT_TOOLS
+        ]
+
+    def run(self, task: AgentTask, ws: Workspace, budget: AgentBudget) -> AgentResult:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": AGENT_SYSTEM},
+            {"role": "user", "content": task_brief(task, ws)},
+        ]
+        steps: list[dict[str, Any]] = []
+        tin = tout = 0
+        cost = 0.0
+        for turn in range(budget.max_iterations * 4):  # several tool calls per iteration
+            if tin + tout >= budget.max_tokens:
+                return AgentResult(False, "Token budget exhausted.", steps, tin, tout, cost)
+            body = self.client.chat(
+                {"model": self.model, "messages": messages, "tools": self._tools()},
+                max_tokens=self.max_tokens,
+            )
+            used_in, used_out = usage_of(body)
+            tin, tout = tin + used_in, tout + used_out
+            cost = cost_usd(self.model, tin, tout, prices=self.prices)
+            choice = body["choices"][0]
+            message = choice.get("message") or {}
+            if message.get("refusal") or choice.get("finish_reason") == "content_filter":
+                return AgentResult(False, "Model declined the task.", steps, tin, tout, cost)
+            calls = message.get("tool_calls") or []
+            # Echo the assistant turn back exactly as the protocol expects it.
+            reply: dict[str, Any] = {"role": "assistant", "content": message.get("content") or ""}
+            if calls:
+                reply["tool_calls"] = calls
+            messages.append(reply)
+            if not calls:
+                nudge = (
+                    "Continue."
+                    if choice.get("finish_reason") == "length"
+                    else "Use the tools to make the change, then call `finish`."
+                )
+                messages.append({"role": "user", "content": nudge})
+                continue
+            finished: tuple[bool, str] | None = None
+            for call in calls:
+                function = call.get("function") or {}
+                name = str(function.get("name", ""))
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except ValueError:
+                    args = None  # reported back to the model as invalid input
+                content, is_error = dispatch_tool(ws, name, args)
+                steps.append(
+                    {
+                        "step": "tool",
+                        "turn": turn,
+                        "tool": name,
+                        "path": args.get("path") if isinstance(args, dict) else None,
+                        "error": is_error,
+                    }
+                )
+                if name == "finish" and not is_error and isinstance(args, dict):
+                    finished = (bool(args.get("success")), str(args.get("summary", "")))
+                messages.append(
+                    {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
+                )
+            if finished is not None:
+                return AgentResult(finished[0], finished[1][:2000], steps, tin, tout, cost)
+        return AgentResult(False, "Iteration budget exhausted.", steps, tin, tout, cost)

@@ -180,6 +180,7 @@ class LLMGateway:
                 response.output_tokens,
                 response.cache_read_tokens,
                 fallback_model=cfg.model,
+                prices=cfg.prices,
             )
             session.add(
                 UsageRecord(

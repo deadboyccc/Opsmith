@@ -30,6 +30,9 @@ CEILING: tuple[float, float, float] = (
 )
 
 
+_WARNED: set[str] = set()
+
+
 def price_for(model: str, fallback_model: str | None = None) -> tuple[float, float, float]:
     """Price of ``model``; of ``fallback_model`` (the configured model) when the id the API
     reported is not listed; and the most expensive known price when neither is."""
@@ -42,7 +45,13 @@ def price_for(model: str, fallback_model: str | None = None) -> tuple[float, flo
             extra={"model": model, "priced_as": fallback_model},
         )
         return PRICES[fallback_model]
-    log.warning("no price for model; costed at the most expensive rate", extra={"model": model})
+    if model not in _WARNED:  # once per model, not once per call
+        _WARNED.add(model)
+        log.warning(
+            "no price for model; costed at the most expensive rate. Set input_price_per_mtok "
+            "and output_price_per_mtok on the stage (0 for a local model)",
+            extra={"model": model},
+        )
     return CEILING
 
 
@@ -53,8 +62,15 @@ def cost_usd(
     cache_read_tokens: int = 0,
     *,
     fallback_model: str | None = None,
+    prices: tuple[float, float] | None = None,
 ) -> float:
-    inp, out, cache = price_for(model, fallback_model)
+    """``prices`` are the (input, output) rates configured on the stage. They take precedence
+    over the list prices, and are the only source for providers Opsmith has no list for."""
+    if prices is not None:
+        inp, out = prices
+        cache = inp
+    else:
+        inp, out, cache = price_for(model, fallback_model)
     billable_input = max(input_tokens - cache_read_tokens, 0)
     return round(
         (billable_input * inp + output_tokens * out + cache_read_tokens * cache) / 1_000_000, 6

@@ -16,10 +16,15 @@ from opsmith.config import Settings
 from opsmith.connectors import build_connector
 from opsmith.db import Database
 from opsmith.etl.pipeline import BundleBuilder, ConnectorFactory, IngestionService
-from opsmith.executor.agents import ClaudeCodingAgent, CodingAgent, HeuristicAgent
+from opsmith.executor.agents import (
+    ClaudeCodingAgent,
+    CodingAgent,
+    HeuristicAgent,
+    OpenAICodingAgent,
+)
 from opsmith.executor.service import AgentFactory, ExecutionService
 from opsmith.inference.orchestrator import InferenceOrchestrator
-from opsmith.llm import LLMGateway, ProviderNotAllowed, default_gateway
+from opsmith.llm import ChatClient, LLMError, LLMGateway, ProviderNotAllowed, default_gateway
 from opsmith.models import Job
 from opsmith.queue import Handler, Worker
 from opsmith.review import ReviewService
@@ -45,7 +50,23 @@ def default_agent_factories(settings: Settings, gateway: LLMGateway) -> dict[str
             api_key_ref=settings.anthropic_api_key_ref,
         )
 
-    return {"heuristic": lambda _ps: HeuristicAgent(), "claude": claude}
+    def openai(ps: ProjectSettings) -> CodingAgent:
+        if "openai" not in gateway.allowed(ps):
+            raise ProviderNotAllowed("the openai executor requires 'openai' in the allowlist")
+        cfg = ps.llm.for_stage("executor")
+        if cfg.provider != "openai":
+            raise LLMError(
+                "executor_agent is 'openai' but no model is configured for it: set "
+                "llm.stages.executor (or llm.default) to provider 'openai' with a model"
+            )
+        return OpenAICodingAgent(
+            client=ChatClient(settings.openai_base_url, settings.openai_api_key_ref),
+            model=cfg.model,
+            max_tokens=cfg.max_tokens,
+            prices=cfg.prices,
+        )
+
+    return {"heuristic": lambda _ps: HeuristicAgent(), "claude": claude, "openai": openai}
 
 
 class Platform:
