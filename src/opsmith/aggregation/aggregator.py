@@ -4,6 +4,8 @@
   audit flagged, are merged into one group (confidence combines via noisy-OR).
 * Groups matching an open task enrich it; matching a recently closed task are suppressed;
   matching a rejected task are suppressed unless the evidence *materially* changed.
+* A task a human has already approved is never changed underneath them: evidence for a task
+  that is ``approved`` or ``executing`` waits until the execution has finished.
 * Everything else becomes a ranked task and is submitted to the human review queue.
 """
 
@@ -40,6 +42,12 @@ LINE_PROXIMITY = 25
 EXACT_LINE = 2
 _STRENGTH_MULTIPLIER = {"false_positive": 3.0, "insufficient_evidence": 2.0}
 _SEVERITY_ONLY = {"wont_fix", "duplicate", "out_of_scope"}
+# Between a human approval and the end of the execution the task is frozen: it is exactly
+# what the reviewer approved, and what the coding agent is working from.
+FROZEN_TASK_STATES = frozenset({"approved", "executing"})
+
+
+_PROTECTION_RANK = {"none": 0, "elevated": 1, "excluded": 2}
 
 
 def _norm(path: str | None) -> str | None:
@@ -118,8 +126,28 @@ class Group:
         return noisy_or(list(by_kind.values()))
 
     @property
+    def distinct(self) -> list[Finding]:
+        """Findings with repeated static detections collapsed. An audit re-reporting the same
+        defect (same fingerprint) is the same evidence again, not more evidence; every
+        runtime finding is a separate occurrence."""
+        out: list[Finding] = []
+        seen: set[str] = set()
+        ranked = sorted(
+            self.findings,
+            key=lambda f: (SEVERITY_RANK.get(f.severity, 2), f.confidence),
+            reverse=True,
+        )
+        for f in ranked:
+            if source_kind(f) == "static":
+                if f.fingerprint in seen:
+                    continue
+                seen.add(f.fingerprint)
+            out.append(f)
+        return out
+
+    @property
     def evidence_strength(self) -> float:
-        return round(sum(f.evidence_strength for f in self.findings), 3)
+        return round(sum(f.evidence_strength for f in self.distinct), 3)
 
     @property
     def source_kinds(self) -> set[str]:
@@ -140,7 +168,7 @@ class Group:
 
     @property
     def occurrences(self) -> int:
-        return len(self.findings)
+        return len(self.distinct)
 
 
 class Aggregator:
@@ -254,8 +282,10 @@ class Aggregator:
         task = self._existing_task(session, project.id, group)
         if task is None:
             return "new"
+        if task.status in FROZEN_TASK_STATES:
+            return "deferred"  # findings stay `new`; attached once the execution is over
         if task.status in OPEN_TASK_STATES or task.status == "regressed":
-            self._attach(session, task, group)
+            self._attach(session, task, settings, group)
             if task.status == "regressed":
                 transition_task(
                     session, task, "in_review", details={"reason": "regression evidence attached"}
@@ -275,7 +305,7 @@ class Aggregator:
             if rule is None or self.materially_changed(rule, group):
                 if rule is not None:
                     rule.active = False
-                self._attach(session, task, group)
+                self._attach(session, task, settings, group)
                 task.rejection_reason = None
                 transition_task(
                     session,
@@ -315,7 +345,15 @@ class Aggregator:
         ).all()
         if task_ids:
             tasks = session.scalars(select(Task).where(Task.id.in_(set(task_ids)))).all()
-            return max(tasks, key=lambda t: t.created_at)
+            # A task that is still open wins over a newer closed one, so evidence is not
+            # written off as "recently closed" while someone is still working on the problem.
+            return max(
+                tasks,
+                key=lambda t: (
+                    t.status in OPEN_TASK_STATES or t.status == "regressed",
+                    t.created_at,
+                ),
+            )
         # Cross-run correlation: runtime evidence arriving after a static finding (or the
         # reverse) attaches to the open task that already holds the other kind of evidence.
         located = [f for f in group.findings if f.path]
@@ -332,6 +370,12 @@ class Aggregator:
                 for f in located:
                     if ev["kind"] == source_kind(f):
                         continue
+                    if (
+                        task.repository_id
+                        and f.repository_id
+                        and f.repository_id != task.repository_id
+                    ):
+                        continue  # the same relative path in another repository
                     dist = correlation_distance(
                         f.path,
                         f.line,
@@ -344,7 +388,9 @@ class Aggregator:
                         best = (dist, task)
         return best[1] if best else None
 
-    def _attach(self, session: Session, task: Task, group: Group) -> None:
+    def _attach(
+        self, session: Session, task: Task, settings: ProjectSettings, group: Group
+    ) -> None:
         for f in group.findings:
             f.task_id = task.id
             f.status = "grouped"
@@ -366,45 +412,73 @@ class Aggregator:
         # runtime findings are new occurrences of the problem.
         fresh = [
             f
-            for f in group.findings
+            for f in group.distinct
             if source_kind(f) == "runtime" or f.fingerprint not in existing_fps
         ]
         task.last_seen_at = utcnow()
-        if not fresh:
-            return
-        task.evidence = (task.evidence + [self._evidence(f) for f in fresh])[-50:]
-        for path in group.paths:
-            if not any(_same_file(path, existing) for existing in task.paths):
-                task.paths = [*task.paths, path]
-        task.occurrences += len(fresh)
-        task.evidence_strength = round(
-            task.evidence_strength + sum(f.evidence_strength for f in fresh), 3
-        )
-        task.confidence = noisy_or([task.confidence, group.confidence])
-        if SEVERITY_RANK.get(group.severity, 2) > SEVERITY_RANK.get(task.severity, 2):
+        # A re-detection can still raise the severity (triage re-rated it). Record that even
+        # when nothing else is new, so a task re-proposed for that reason really differs.
+        raised = SEVERITY_RANK.get(group.severity, 2) > SEVERITY_RANK.get(task.severity, 2)
+        if raised:
             task.severity = group.severity
-        task.last_seen_at = utcnow()
-        task.provenance = self._merge_provenance(task.provenance, group)
+        if not fresh and not raised:
+            return
+        if fresh:
+            task.evidence = (task.evidence + [self._evidence(f) for f in fresh])[-50:]
+            new_paths = [
+                path
+                for path in group.paths
+                if not any(_same_file(path, existing) for existing in task.paths)
+            ]
+            if new_paths:
+                task.paths = [*task.paths, *new_paths]
+                # The scope grew, so the protection level is re-evaluated (never lowered here).
+                level = classify(task.paths, settings.protected_paths)
+                if _PROTECTION_RANK[level] > _PROTECTION_RANK.get(task.protection, 0):
+                    task.protection = level
+            task.occurrences += len(fresh)
+            task.evidence_strength = round(
+                task.evidence_strength + sum(f.evidence_strength for f in fresh), 3
+            )
+            # Same rule as at creation: the best confidence per kind of evidence, combined
+            # across kinds. Repeated evidence of one kind does not compound.
+            by_kind: dict[str, float] = {}
+            for ev in task.evidence:
+                kind = ev.get("kind")
+                if kind:
+                    by_kind[kind] = max(by_kind.get(kind, 0.0), float(ev.get("confidence") or 0))
+            task.confidence = max(task.confidence, noisy_or(list(by_kind.values())))
+            task.provenance = self._merge_provenance(task.provenance, group)
         kinds = {e.get("kind") for e in task.evidence}
+        services = set(
+            session.scalars(
+                select(Finding.service_id).where(
+                    Finding.task_id == task.id, Finding.service_id.is_not(None)
+                )
+            ).all()
+        )
         task.score = score(
             severity=task.severity,
             confidence=task.confidence,
             evidence_strength=task.evidence_strength,
             occurrences=task.occurrences,
-            services_affected=max(len(group.services), 1),
+            services_affected=max(len(services | group.services), 1),
             source_kinds=len(kinds - {None}),
             effort=task.effort_estimate,
             category=task.category,
             last_seen=task.last_seen_at,
         )
         task.priority = priority_for(task.score)
+        # Anyone who loaded the task before this change reviews a stale copy; the version
+        # bump makes `expected_version` catch that.
+        task.version += 1
         audit_log.record(
             session,
             tenant_id=task.tenant_id,
             entity_type="task",
             entity_id=task.id,
             action="task.evidence_added",
-            details={"findings": [f.id for f in group.findings]},
+            details={"findings": [f.id for f in group.findings], "severity_raised": raised},
         )
 
     @staticmethod
@@ -526,7 +600,7 @@ class Aggregator:
             severity=group.severity,
             confidence=group.confidence,
             problem_statement=draft.problem_statement,
-            evidence=[self._evidence(f) for f in group.findings][:50],
+            evidence=[self._evidence(f) for f in group.distinct][:50],
             proposed_approach=draft.proposed_approach,
             acceptance_criteria=draft.acceptance_criteria,
             repository_id=self._repository_for(session, project, group),

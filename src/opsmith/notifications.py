@@ -35,9 +35,9 @@ def notify(
         tenant_id=tenant_id,
         project_id=project_id,
         event=event,
-        subject=subject,
+        subject=subject[:300],  # column size; titles come from model output and can be long
         body=body,
-        link=link,
+        link=link[:500] if link else None,
     )
     session.add(note)
     session.flush()
