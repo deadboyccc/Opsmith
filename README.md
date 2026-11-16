@@ -1,6 +1,7 @@
 # Opsmith
 
 [![CI](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/deadboyccc/Opsmith)](https://github.com/deadboyccc/Opsmith/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Opsmith turns production signals and source code into reviewed pull requests.**
@@ -17,9 +18,11 @@ vLLM.
 > **Two rules are never broken.** Nothing changes code without a recorded human approval, and
 > Opsmith cannot merge. A human always merges.
 
-**Status: 1.0.** The whole loop runs and is covered by tests, including adversarial ones
-and real-container sandbox tests. It has not been proven in production. See
-[what has been tested](#what-has-been-tested) before you point it at something valuable.
+**Status: stable, not yet proven in production.** Releases follow semantic versioning; see the
+[latest release](https://github.com/deadboyccc/Opsmith/releases/latest) and the
+[changelog](CHANGELOG.md). The whole loop runs and is covered by tests, including adversarial
+ones and real-container sandbox tests. See [what has been tested](#what-has-been-tested) before
+you point it at something valuable.
 
 ## Contents
 
