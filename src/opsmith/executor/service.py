@@ -22,6 +22,7 @@ hooks, config or filters planted in the workspace are never executed by the work
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -45,7 +46,14 @@ from opsmith.executor.sandbox import (
     Workspace,
     make_sandbox,
 )
-from opsmith.gitutil import GitError, head_sha, run_git, staged_added_lines, worktree_changes
+from opsmith.gitutil import (
+    GitError,
+    head_sha,
+    nested_git_entries,
+    run_git,
+    staged_added_lines,
+    worktree_changes,
+)
 from opsmith.llm import BudgetExceeded, BudgetGuard
 from opsmith.models import (
     ExecutionRun,
@@ -401,11 +409,24 @@ class ExecutionService:
                         }
                     )
             # Nothing sandboxed runs after this point, so what is gated is what is committed.
-            shutil.rmtree(workdir / ".opsmith-home", ignore_errors=True)
+            home = workdir / ".opsmith-home"
+            shutil.rmtree(home, ignore_errors=True)
+            if home.is_symlink() or home.is_file():  # a check replaced it
+                home.unlink()
+            if os.path.lexists(home):
+                return fail("the sandbox home directory could not be removed")
+            # Before the platform runs any git command on the workspace: git would read a
+            # nested repository's configuration, which sandboxed code controls.
+            nested = nested_git_entries(workdir)
+            if nested:
+                return fail(
+                    f"refused: the workspace contains a nested git repository ({nested[0]}), "
+                    "which only sandboxed code can have created"
+                )
             changed = [
                 f
                 for f in worktree_changes(workdir, git_dir=git_dir)
-                if not f.startswith(".opsmith-home")
+                if f != ".opsmith-home" and not f.startswith(".opsmith-home/")
             ]
             if any(c["exit_code"] != 0 for c in check_rows):
                 failed = [c["name"] for c in check_rows if c["exit_code"] != 0]

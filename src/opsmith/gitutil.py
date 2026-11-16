@@ -43,12 +43,16 @@ def run_git(
     timeout: int = 300,
     author: tuple[str, str] | None = None,
     git_dir: Path | None = None,
+    errors: str = "strict",
 ) -> str:
     """Run one git command.
 
     ``git_dir`` pins the repository metadata to a directory other than ``<cwd>/.git`` (with
     ``cwd`` as the work tree). The executor uses it so that nothing a sandboxed command wrote
     into the checkout's own ``.git`` (config, hooks, filters) is ever read by the platform.
+
+    Output is decoded as strict UTF-8 by default, so a file name is never silently altered.
+    ``errors="replace"`` is for output that contains file contents, such as a ``--text`` diff.
     """
     cmd = ["git"]
     for item in _SAFE_CONFIG:
@@ -79,6 +83,7 @@ def run_git(
             cwd=cwd,
             capture_output=True,
             text=True,
+            errors=errors,
             timeout=timeout,
             env=git_env(extra),
             check=False,
@@ -130,6 +135,27 @@ def worktree_changes(repo: Path, *, git_dir: Path | None = None) -> list[str]:
     return files
 
 
+def nested_git_entries(root: Path) -> list[str]:
+    """Every entry named ``.git`` below ``root``, other than ``root/.git`` itself.
+
+    A nested repository brings its own configuration, and git reads it when it descends into
+    a submodule: a filter driver defined there runs for whoever calls ``git status`` in the
+    parent. Opsmith checks out without submodules, so any such entry in a workspace was
+    written by sandboxed code or the agent. Symbolic links are reported, never followed.
+    """
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = Path(dirpath).relative_to(root)
+        top = here == Path(".")
+        found += [
+            (here / name).as_posix()
+            for name in (*dirnames, *filenames)
+            if name == ".git" and not top
+        ]
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+    return sorted(found)
+
+
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
@@ -141,9 +167,12 @@ def staged_added_lines(repo: Path, *, git_dir: Path | None = None) -> list[tuple
     """
     run_git(["add", "-A"], repo, git_dir=git_dir)
     diff = run_git(
-        ["diff", "--cached", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"],
+        # --text: a "-diff" or "binary" attribute would otherwise print "Binary files differ"
+        # instead of the added lines, and hide them from the credential scan.
+        ["diff", "--cached", "-U0", "--text", "--no-color", "--no-ext-diff", "--no-textconv"],
         repo,
         git_dir=git_dir,
+        errors="replace",  # binary files are printed too; their bytes need not be UTF-8
     )
     out: list[tuple[str, int, str]] = []
     path: str | None = None

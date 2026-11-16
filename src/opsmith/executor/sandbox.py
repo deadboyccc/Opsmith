@@ -233,7 +233,8 @@ class Workspace:
         if not target.is_relative_to(self.root):
             raise WorkspaceError(f"path escapes the workspace: {rel!r}")
         parts = target.relative_to(self.root).parts
-        if parts and parts[0] in RESERVED_DIRS:
+        # ".git" at any depth: a nested repository's config is read by git on the worker.
+        if parts and (parts[0] in RESERVED_DIRS or ".git" in parts):
             raise WorkspaceError(f"path is not editable: {rel!r}")
         return target
 
@@ -242,7 +243,7 @@ class Workspace:
         out: list[str] = []
         for path in sorted(base.rglob("*")):
             relp = path.relative_to(self.root)
-            if relp.parts and relp.parts[0] in RESERVED_DIRS:
+            if relp.parts and (relp.parts[0] in RESERVED_DIRS or ".git" in relp.parts):
                 continue
             if path.is_file():
                 out.append(relp.as_posix())

@@ -31,6 +31,7 @@ from opsmith.executor.sandbox import (
     LocalSandbox,
     SandboxUnavailable,
     Workspace,
+    WorkspaceError,
     make_sandbox,
 )
 from opsmith.executor.service import sandbox_policy_error
@@ -62,6 +63,7 @@ from opsmith.scheduler import (
 from opsmith.schemas import ProjectSettings
 from opsmith.scm.base import SCMError, check_pushable
 from opsmith.security import create_tenant, create_user
+from tests.conftest import FAKE_AWS_KEY
 from tests.test_executor import EditingAgent, _use_agent, approve, make_task, task
 
 
@@ -188,6 +190,93 @@ def test_git_hooks_and_config_planted_by_sandboxed_code_never_run(
     assert not hook_marker.exists()
     assert not config_marker.exists()
     assert ".git/" not in run_git(["show", "--stat", _pr_branches(seed)], seed.repo_path)
+
+
+def test_a_nested_repository_planted_by_sandboxed_code_is_refused(
+    platform, seed, drain, tmp_path: Path
+) -> None:
+    """The repository has a submodule (checked out empty). Sandboxed code fills it with a
+    repository whose config defines a filter driver. `git status` in the parent descends into
+    the submodule and would run that driver on the worker, outside the sandbox."""
+    marker = tmp_path / "filter-ran"
+    lib = _git_repo(tmp_path / "lib")
+    (lib / "a.txt").write_text("one\n")
+    run_git(["add", "a.txt"], lib)
+    run_git(["commit", "-q", "-m", "lib"], lib, author=("t", "t@example.com"))
+    run_git(
+        ["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "sub"],
+        seed.repo_path,
+    )
+    run_git(["commit", "-q", "-m", "add sub"], seed.repo_path, author=("t", "t@example.com"))
+    task_id = make_task(platform, seed)
+    _set_repo(
+        platform,
+        seed,
+        test_command=(
+            f"cp -r {lib}/. sub/ && git -C sub config filter.x.clean 'touch {marker}; cat' && "
+            "echo '* filter=x' > sub/.gitattributes && echo two > sub/a.txt"
+        ),
+    )
+    approve(platform, seed, task_id)
+    drain()
+    t = task(platform, task_id)
+    assert t.status == "in_review"
+    assert "nested git repository" in t.execution_report["error"]
+    assert not marker.exists()
+    assert not _pr_branches(seed)
+
+
+def test_the_agent_cannot_write_into_a_nested_git_directory(tmp_path: Path) -> None:
+    ws = Workspace(LocalSandbox(tmp_path), {})
+    for path in ("sub/.git/config", "a/b/.git/hooks/pre-commit", ".git/config"):
+        with pytest.raises(WorkspaceError, match="not editable"):
+            ws.write_file(path, "x")
+
+
+def test_secret_gate_reads_files_that_git_would_show_as_binary(platform, seed, drain) -> None:
+    """A "-diff" attribute makes `git diff` print "Binary files differ" instead of the lines."""
+    task_id = make_task(platform, seed)
+    _set_repo(platform, seed, test_command="printf '*.lock -diff\\n' > .gitattributes")
+    _use_agent(platform, seed, EditingAgent("deps.lock", f'key = "{FAKE_AWS_KEY}"\n'))
+    approve(platform, seed, task_id)
+    drain()
+    assert "credential-like" in task(platform, task_id).execution_report["error"]
+    assert not _pr_branches(seed)
+
+
+def test_secret_scan_survives_binary_files_in_the_diff(tmp_path: Path) -> None:
+    """Bytecode and images are staged with the change; their bytes are not UTF-8."""
+    repo = _git_repo(tmp_path / "r")
+    (repo / "cache.pyc").write_bytes(b"\xcb\x0d\x0d\x0a\x00\xff" * 50)
+    (repo / "app.py").write_text(f'K = "{FAKE_AWS_KEY}"\n')
+    assert ("app.py", 1, f'K = "{FAKE_AWS_KEY}"') in staged_added_lines(repo)
+
+
+def test_files_named_like_the_sandbox_home_are_gated(platform, seed, drain) -> None:
+    task_id = make_task(platform, seed)
+    _use_agent(platform, seed, EditingAgent(".opsmith-home-certs/server.pem", "-----BEGIN\n"))
+    approve(platform, seed, task_id)
+    drain()
+    t = task(platform, task_id)
+    assert t.status == "in_review"
+    assert "excluded paths" in t.execution_report["error"]
+    assert not _pr_branches(seed)
+
+
+def test_a_sandbox_home_replaced_by_a_link_is_never_committed(
+    platform, seed, drain, tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    task_id = make_task(platform, seed)
+    _set_repo(
+        platform, seed, test_command=f"rm -rf .opsmith-home && ln -s {elsewhere} .opsmith-home"
+    )
+    approve(platform, seed, task_id)
+    drain()
+    assert task(platform, task_id).status == "pr_open", task(platform, task_id).execution_report
+    assert ".opsmith-home" not in run_git(["show", "--stat", _pr_branches(seed)], seed.repo_path)
+    assert elsewhere.is_dir()  # the link was removed, not followed
 
 
 def test_local_sandbox_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:

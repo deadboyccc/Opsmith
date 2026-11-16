@@ -58,9 +58,9 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 
 | Guarantee | Enforcement | Tests |
 |---|---|---|
-| The diff is gated after the last sandboxed command | Protected-path and credential checks run after the platform's own check run; nothing sandboxed runs between the gate and the commit | `test_files_written_by_the_check_run_are_gated_too` |
+| The diff is gated after the last sandboxed command | Protected-path and credential checks run after the platform's own check run; nothing sandboxed runs between the gate and the commit. The sandbox home is removed by exact path first, and a link or file left in its place is deleted, not followed | `test_files_written_by_the_check_run_are_gated_too`, `test_files_named_like_the_sandbox_home_are_gated`, `test_a_sandbox_home_replaced_by_a_link_is_never_committed` |
 | File names cannot hide a protected path | Changed files are read from git's NUL-delimited output | `test_unusual_file_names_are_reported_verbatim`, `test_protected_path_gate_cannot_be_bypassed_by_file_name` |
-| Every added line is scanned for credentials | The diff parser only treats `+++` as a file header inside a header | `test_added_lines_that_look_like_diff_headers_are_still_scanned`, `test_secret_gate_cannot_be_bypassed_by_line_prefix` |
+| Every added line is scanned for credentials | The diff parser only treats `+++` as a file header inside a header; the diff is read with `--text`, so a `-diff` or `binary` attribute cannot hide a file's lines | `test_added_lines_that_look_like_diff_headers_are_still_scanned`, `test_secret_gate_cannot_be_bypassed_by_line_prefix`, `test_secret_gate_reads_files_that_git_would_show_as_binary`, `test_secret_scan_survives_binary_files_in_the_diff` |
 | Pushes go only to `opsmith/...` branches, never the default branch | `scm.base.check_pushable` in every provider; branch names are validated | `test_pushes_stay_inside_the_opsmith_branch_namespace`, `test_github_refuses_default_branch_and_missing_token` |
 | No merge | The provider interface has no such method | `test_scm_interface_has_no_merge_capability` |
 
@@ -72,8 +72,8 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | The whole execution path works through the Docker sandbox | | `test_full_execution_through_the_docker_sandbox` (real containers) |
 | The unconfined `local` backend cannot run real repositories | `sandbox_policy_error`: `local` only for the `local` SCM provider | `test_local_sandbox_is_refused_for_remote_repositories` |
 | No silent downgrade when Docker is missing | `SandboxUnavailable`; the task returns to review | `test_missing_docker_fails_closed`, `test_sandbox_backend_defaults_to_docker_and_is_validated` |
-| Sandboxed code cannot make the worker run something | Git metadata is snapshotted before the agent starts; later git commands use only the snapshot, with hooks and fsmonitor disabled | `test_git_hooks_and_config_planted_by_sandboxed_code_never_run` |
-| The agent stays inside the checkout | `Workspace.resolve` rejects absolute paths, `..`, symlinks out, and `.git` | `test_workspace_confinement`, `test_workspace_refuses_oversized_reads` |
+| Sandboxed code cannot make the worker run something | Git metadata is snapshotted before the agent starts; later git commands use only the snapshot, with hooks and fsmonitor disabled. A nested repository (whose config git would read when it descends into a submodule) refuses the execution before the platform runs git on the workspace | `test_git_hooks_and_config_planted_by_sandboxed_code_never_run`, `test_a_nested_repository_planted_by_sandboxed_code_is_refused` |
+| The agent stays inside the checkout | `Workspace.resolve` rejects absolute paths, `..`, symlinks out, and `.git` at any depth | `test_workspace_confinement`, `test_workspace_refuses_oversized_reads`, `test_the_agent_cannot_write_into_a_nested_git_directory` |
 | The agent's environment holds no credentials | Scrubbed environment; the remote is removed | `test_sandbox_environment_is_scrubbed` |
 | A timeout kills everything the command started | Process group kill (local); container kill by name (Docker) | `test_local_sandbox_timeout_kills_the_whole_process_group`, `test_docker_sandbox_really_isolates` |
 

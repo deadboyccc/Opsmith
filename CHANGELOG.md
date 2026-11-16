@@ -6,6 +6,19 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Security
+
+- **Code planted in a nested repository could run on the worker.** If the repository has a
+  submodule, sandboxed code could fill it with a repository whose configuration defines a
+  filter driver; the platform's `git status` after the checks descended into it and ran the
+  driver outside the sandbox. A nested `.git` anywhere in the workspace now refuses the
+  execution before the platform runs git on it, and the agent cannot write one.
+- **A `-diff` or `binary` git attribute hid a file from the credential scan.** The staged diff
+  is now read as text.
+- **Files whose name starts with `.opsmith-home` skipped the protected-path gate**, and a
+  sandbox home replaced by a link or file could be committed. The home is now matched by exact
+  path and always removed before the gates.
+
 ### Added
 
 - A [compatibility matrix](docs/guide/compatibility.md): what Opsmith talks to, which versions
