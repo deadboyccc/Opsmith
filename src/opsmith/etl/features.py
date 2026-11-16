@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections import defaultdict
@@ -10,7 +11,7 @@ from datetime import datetime
 from statistics import fmean, pstdev
 from typing import Any
 
-from opsmith.schemas import MetricPoint
+from opsmith.schemas import MAX_SIGNAL_CHARS, MetricPoint
 
 _HIGHER_IS_WORSE = re.compile(
     r"latency|duration|error|fail|5xx|4xx|timeout|saturation|cpu|memory|queue|lag|retry|p9\d",
@@ -43,6 +44,20 @@ def series_key(point: MetricPoint) -> str:
     return f"{point.name}{{{labels}}}" if labels else point.name
 
 
+def metric_signal(key: str) -> str:
+    """The signal id of a metric series, bounded to ``MAX_SIGNAL_CHARS``.
+
+    Signals are stored in bounded columns and compared for equality (leads, findings,
+    post-merge verification). A series with many labels can exceed the bound, so a long key
+    keeps a readable prefix and gets a digest of the whole key: still unique, still stable.
+    """
+    signal = f"metric:{key}"
+    if len(signal) <= MAX_SIGNAL_CHARS:
+        return signal
+    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    return f"{signal[: MAX_SIGNAL_CHARS - 17]}#{digest}"
+
+
 def _r(value: float) -> float | None:
     return None if math.isnan(value) or math.isinf(value) else round(value, 4)
 
@@ -60,6 +75,8 @@ def compute_features(
     baseline: dict[str, list[float]] = defaultdict(list)
     names: dict[str, str] = {}
     for p in points:
+        if not math.isfinite(p.value):
+            continue  # one NaN/Inf would turn every statistic of the series into NaN
         key = series_key(p)
         names[key] = p.name
         (current if p.timestamp >= window_start else baseline)[key].append(p.value)
@@ -75,7 +92,10 @@ def compute_features(
         p95, b_p95 = percentile(cur, 0.95), percentile(base, 0.95)
         delta = (mean - b_mean) / abs(b_mean) if base and b_mean != 0 else math.nan
         if base and not math.isnan(b_std):
-            z = (mean - b_mean) / b_std if b_std > 0 else (0.0 if mean == b_mean else math.inf)
+            if b_std > 0:
+                z = (mean - b_mean) / b_std
+            else:  # flat baseline: any change is infinitely unusual, in its own direction
+                z = 0.0 if mean == b_mean else math.copysign(math.inf, mean - b_mean)
         else:
             z = math.nan
         p95_shift = (p95 - b_p95) / abs(b_p95) if base and b_p95 != 0 else math.nan
@@ -95,7 +115,7 @@ def compute_features(
             {
                 "series": key,
                 "name": names[key],
-                "signal": f"metric:{key}",
+                "signal": metric_signal(key),
                 "direction": dirn,
                 "count": len(cur),
                 "mean": _r(mean),
@@ -109,7 +129,7 @@ def compute_features(
                 "baseline_std": _r(b_std),
                 "baseline_p95": _r(b_p95),
                 "delta_pct": _r(delta * 100) if not math.isnan(delta) else None,
-                "z_score": _r(z) if not math.isinf(z) else 999.0,
+                "z_score": _r(z) if not math.isinf(z) else math.copysign(999.0, z),
                 "p95_shift_pct": _r(p95_shift * 100) if not math.isnan(p95_shift) else None,
                 "anomalous": anomalous,
             }

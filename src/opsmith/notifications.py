@@ -10,11 +10,13 @@ from __future__ import annotations
 import fnmatch
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy.orm import Session
 
 from opsmith import queue
+from opsmith.connectors.base import ConnectorError, Resolver, check_host_reachable
 from opsmith.models import Job, Notification, Project
 from opsmith.schemas import NotificationChannel, ProjectSettings
 
@@ -66,7 +68,10 @@ def _channels(session: Session, note: Notification) -> list[NotificationChannel]
 
 
 def deliver(
-    session: Session, note: Notification, http: httpx.Client | None = None
+    session: Session,
+    note: Notification,
+    http: httpx.Client | None = None,
+    resolver: Resolver | None = None,
 ) -> list[dict[str, Any]]:
     deliveries: list[dict[str, Any]] = []
     failures = 0
@@ -75,6 +80,14 @@ def deliver(
             log.info("notification", extra={"event": note.event, "subject": note.subject})
             deliveries.append({"channel": "log", "ok": True})
         elif channel.type == "webhook" and channel.url:
+            try:
+                # A webhook URL comes from project settings; it must not be able to reach
+                # cloud metadata endpoints any more than a connector can.
+                check_host_reachable(urlsplit(channel.url).hostname or "", resolver)
+            except ConnectorError as exc:
+                log.warning("webhook refused", extra={"error": str(exc)})
+                deliveries.append({"channel": "webhook", "ok": False, "error": "refused"})
+                continue  # not a failure to retry: no retry can make this URL acceptable
             client = http or httpx.Client(timeout=10)
             try:
                 text = f"*{note.subject}*\n{note.body}" + (f"\n{note.link}" if note.link else "")
@@ -82,14 +95,15 @@ def deliver(
                 ok = resp.status_code < 300
             except httpx.HTTPError as exc:
                 ok = False
-                log.warning("webhook delivery failed", extra={"error": str(exc)})
+                log.warning("webhook delivery failed", extra={"error": type(exc).__name__})
             finally:
                 if http is None:
                     client.close()
             failures += 0 if ok else 1
             deliveries.append({"channel": "webhook", "ok": ok})
     note.deliveries = deliveries
-    note.status = "failed" if failures else "sent"
+    refused = any(d.get("error") == "refused" for d in deliveries)
+    note.status = "failed" if failures or refused else "sent"
     if failures:
         raise RuntimeError(f"{failures} notification channel(s) failed for {note.id}")
     return deliveries

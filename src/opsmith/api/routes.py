@@ -22,6 +22,7 @@ from opsmith.audits import AUDIT_TYPES, registered
 from opsmith.config import CredentialRefError, check_credentials_ref
 from opsmith.connectors import available_types
 from opsmith.dashboard import project_summary
+from opsmith.etl.pipeline import ConnectorDisabledError
 from opsmith.models import (
     AuditLog,
     AuditRun,
@@ -342,6 +343,8 @@ def push_signals(
         batches = platform.ingestion.ingest_push(session, conn, records)
     except ValidationError as exc:
         raise HTTPException(422, _errors(exc)) from exc
+    except ConnectorDisabledError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {"batches": [b.id for b in batches], "records": sum(b.record_count for b in batches)}
 
 

@@ -34,8 +34,11 @@ _WILDCARD = "<*>"
 _LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r'File "(?P<path>[^"]+)", line (?P<line>\d+)'),  # Python traceback
     re.compile(r"\bat [\w.$]+\((?P<path>[\w./-]+\.(?:java|kt|scala)):(?P<line>\d+)\)"),  # JVM
+    # Generic ``dir/file.ext:line``. The look-behind pins a match to the start of a path and
+    # the repetitions are bounded, so a long token costs time linear in its length.
     re.compile(
-        r"(?P<path>(?:[\w.-]+/)+[\w.-]+\.(?:py|js|ts|tsx|jsx|go|rb|rs|php|cs)):(?P<line>\d+)"
+        r"(?<![\w./-])/?(?P<path>(?:[\w.-]{1,255}/){1,64}[\w.-]{1,255}"
+        r"\.(?:py|js|ts|tsx|jsx|go|rb|rs|php|cs)):(?P<line>\d+)"
     ),
 )
 
@@ -55,11 +58,20 @@ def fingerprint_of(service: str, template: str) -> str:
     return hashlib.sha1(f"{service}|{template}".encode(), usedforsecurity=False).hexdigest()[:16]
 
 
+def _repo_relative(path: str) -> str:
+    """Drop leading ``./`` and ``../`` segments and the root of an absolute path.
+
+    Only whole segments are removed, so ``.github/x.py`` keeps its dot."""
+    while path.startswith(("./", "../")):
+        path = path.split("/", 1)[1]
+    return path.lstrip("/")
+
+
 def extract_locations(text: str) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     for pattern in _LOCATION_PATTERNS:
         for match in pattern.finditer(text):
-            loc = (match.group("path").lstrip("./"), int(match.group("line")))
+            loc = (_repo_relative(match.group("path")), int(match.group("line")))
             if loc not in found:
                 found.append(loc)
     return found

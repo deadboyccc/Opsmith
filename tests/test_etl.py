@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+import json
+from datetime import UTC, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -153,3 +154,174 @@ def test_bundle_is_trimmed_to_token_budget(platform, seed) -> None:
         )[0]
         assert bundle.token_estimate <= 2200
         assert len(bundle.log_templates) < 40
+
+
+# --------------------------------------------------------------------------- hardening
+
+
+def test_severity_names_and_numeric_levels() -> None:
+    assert normalize_severity("SEVERE") == "error"  # java.util.logging
+    assert normalize_severity("[WARN]") == "warning"
+    assert normalize_severity("ERROR:") == "error"
+    assert normalize_severity("FINE") == "debug"
+    # pino/bunyan numeric levels
+    assert [normalize_severity(str(n)) for n in (10, 20, 30, 40, 50, 60)] == [
+        "debug",
+        "debug",
+        "info",
+        "warning",
+        "error",
+        "critical",
+    ]
+    assert normalize_severity("3") == "info"  # not a pino level; unknown stays info
+
+
+def _series(name: str, base: list[float], cur: list[float]) -> dict:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    window = start + timedelta(hours=6)
+    points = [
+        MetricPoint(timestamp=start + timedelta(minutes=i), service="s", name=name, value=v)
+        for i, v in enumerate(base)
+    ] + [
+        MetricPoint(timestamp=window + timedelta(minutes=i), service="s", name=name, value=v)
+        for i, v in enumerate(cur)
+    ]
+    return compute_features(points, window)[0]
+
+
+def test_flat_baseline_change_has_a_direction() -> None:
+    # success_rate is lower-is-worse: a 40% drop from a perfectly flat baseline is a regression.
+    drop = _series("success_rate", [100.0] * 72, [60.0] * 72)
+    assert drop["anomalous"]
+    assert drop["z_score"] == -999.0
+    # ... and the same change upwards is an improvement, not an anomaly.
+    rise = _series("success_rate", [60.0] * 72, [100.0] * 72)
+    assert not rise["anomalous"]
+    assert rise["z_score"] == 999.0
+    worse = _series("latency_ms", [100.0] * 72, [140.0] * 72)
+    assert worse["anomalous"]
+    assert worse["z_score"] == 999.0
+    better = _series("latency_ms", [100.0] * 72, [60.0] * 72)
+    assert not better["anomalous"]
+    assert better["z_score"] == -999.0
+
+
+def test_non_finite_points_do_not_poison_a_series() -> None:
+    nan, inf = float("nan"), float("inf")
+    clean = _series("latency_ms", [100.0, 101.0] * 36, [400.0] * 72)
+    for base, cur in (
+        ([100.0, 101.0] * 36 + [nan], [400.0] * 72),
+        ([100.0, 101.0] * 36 + [inf, -inf], [400.0] * 72),
+        ([100.0, 101.0] * 36, [400.0] * 72 + [nan, inf]),
+    ):
+        feat = _series("latency_ms", base, cur)
+        assert feat["anomalous"]
+        assert (feat["mean"], feat["baseline_mean"], feat["count"]) == (
+            clean["mean"],
+            clean["baseline_mean"],
+            clean["count"],
+        )
+
+
+def test_locations_keep_dot_directories_and_long_tokens_are_cheap() -> None:
+    text = (
+        'File ".github/scripts/deploy.py", line 3\n'
+        "at x (.venv/lib/a.py:9)\n"
+        'File "./src/app.py", line 1\n'
+        'File "../../lib/util.py", line 2\n'
+        'File "/srv/app/main.py", line 7'
+    )
+    assert extract_locations(text) == [
+        (".github/scripts/deploy.py", 3),
+        ("src/app.py", 1),
+        ("lib/util.py", 2),
+        ("srv/app/main.py", 7),
+        (".venv/lib/a.py", 9),
+    ]
+    # One long token used to cost time quadratic in its length (41 s for 40 kB of "a/").
+    # No timing assertion: a regression shows as a hang.
+    for unit in ("a", "a/", "a.", "ab/cd.py:"):
+        assert extract_locations(unit * (400_000 // len(unit))) == []
+    deep = "/".join(["pkg"] * 40) + "/mod.py:12"
+    assert extract_locations(f"error at {deep}") == [(deep.rsplit(":", 1)[0], 12)]
+
+
+def test_quiet_metric_rows_are_trimmed_before_any_log_template() -> None:
+    builder = BundleBuilder(store=None, max_tokens=3000)  # type: ignore[arg-type]
+    templates = [
+        {"ref": f"t{i}", "samples": ["s" * 200] * 3, "event_refs": ["e"] * 5} for i in range(3)
+    ]
+    features = [
+        {
+            "series": f"http_requests_total{{route=/r{i}}}",
+            "anomalous": i in (7, 90),
+            "pad": "x" * 80,
+        }
+        for i in range(200)
+    ]
+    kept_templates, kept_features = builder._fit(templates, features)
+    assert [t["ref"] for t in kept_templates] == ["t0", "t1", "t2"]
+    assert [f["anomalous"] for f in kept_features[:2]] == [True, True]  # anomalies survive
+    assert 2 < len(kept_features) < 200
+    assert len(json.dumps({"t": kept_templates, "m": kept_features})) // 4 <= 3000
+
+    # Only when the templates alone exceed the budget are templates dropped (lowest weight last).
+    big = [{"ref": f"t{i}", "samples": ["s" * 400], "event_refs": []} for i in range(40)]
+    kept_templates, kept_features = builder._fit(big, features)
+    assert 0 < len(kept_templates) < 40
+    assert [t["ref"] for t in kept_templates] == [f"t{i}" for i in range(len(kept_templates))]
+    assert all(f["anomalous"] for f in kept_features)
+
+
+def test_overlapping_baselines_count_each_point_once(platform, seed) -> None:
+    start = datetime.fromisoformat(seed.metric_connector.cursor["last_end"])
+    records = []
+    for i in range(144):  # 6h baseline, then two 3h windows; the second one regresses 4x
+        ts = start - timedelta(hours=6) + timedelta(minutes=5 * i)
+        value = 400.0 if ts >= start + timedelta(hours=3) else 100.0 + (i % 2)
+        records.append(
+            {
+                "timestamp": ts.isoformat(),
+                "name": "latency_ms",
+                "service": "payments-api",
+                "value": value,
+            }
+        )
+    write_logs(seed.metrics, records)
+    with platform.db.session() as s:
+        for hours in (3, 6):  # both batches carry a 6h look-back, which overlaps
+            platform.ingestion.run_connector(
+                s, seed.metric_connector.id, end=start + timedelta(hours=hours)
+            )
+        feature = platform.bundles.build_for_project(s, seed.project.id)[0].metric_features[0]
+        assert (feature["count"], feature["baseline_count"]) == (72, 72)
+        assert feature["mean"] == 250.25
+
+
+def test_first_and_last_seen_are_ordered_by_time_not_text(platform, seed) -> None:
+    start = datetime.fromisoformat(seed.log_connector.cursor["last_end"]).replace(microsecond=0)
+    early = start + timedelta(minutes=10)
+    plus2 = timezone(timedelta(hours=2))
+    stamps = [
+        (early + timedelta(minutes=30)).isoformat(),  # +00:00
+        early.astimezone(plus2).isoformat(),  # the earliest instant, written with +02:00
+        (early + timedelta(minutes=30, microseconds=500_000)).isoformat(),  # the latest
+        (early + timedelta(minutes=5)).replace(tzinfo=None).isoformat(),  # naive: taken as UTC
+    ]
+    write_logs(
+        seed.logs,
+        [
+            {"timestamp": ts, "level": "error", "service": "payments-api", "message": "boom a"}
+            for ts in stamps
+        ],
+    )
+    with platform.db.session() as s:
+        platform.ingestion.run_connector(s, seed.log_connector.id, end=start + timedelta(hours=6))
+        template = platform.bundles.build_for_project(s, seed.project.id)[0].log_templates[0]
+    assert template["count"] == 4
+    assert datetime.fromisoformat(template["first_seen"]) == early
+    assert datetime.fromisoformat(template["last_seen"]) == early + timedelta(
+        minutes=30, microseconds=500_000
+    )
+    assert template["first_seen"].endswith("Z")
+    assert template["last_seen"].endswith("Z")

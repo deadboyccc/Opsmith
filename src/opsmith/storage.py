@@ -18,6 +18,7 @@ class ObjectStore(Protocol):
     def put_text(self, key: str, text: str) -> None: ...
     def get_text(self, key: str) -> str: ...
     def exists(self, key: str) -> bool: ...
+    def delete(self, key: str) -> None: ...
 
 
 class LocalObjectStore:
@@ -59,3 +60,7 @@ class LocalObjectStore:
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    def delete(self, key: str) -> None:
+        """Remove an object if it exists (used to undo a write whose transaction rolled back)."""
+        self._path(key).unlink(missing_ok=True)

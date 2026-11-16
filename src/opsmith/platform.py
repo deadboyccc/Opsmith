@@ -75,7 +75,12 @@ class Platform:
                 "github": GitHubSCM(),
             }
         )
-        self.ingestion = IngestionService(self.store, connector_factory)
+        self.ingestion = IngestionService(
+            self.store,
+            connector_factory,
+            local_root=self.settings.local_root,
+            local_deny=(self.settings.data_dir,),
+        )
         self.bundles = BundleBuilder(self.store)
         self.inference = InferenceOrchestrator(self.gateway)
         self.audits = AuditRunner(self.gateway, self.scm, self.settings.data_dir / "checkouts")
