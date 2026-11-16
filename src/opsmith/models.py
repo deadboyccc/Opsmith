@@ -131,6 +131,8 @@ class Schedule(Base):
     next_run_at: Mapped[datetime] = mapped_column(default=utcnow)
     last_enqueued_at: Mapped[datetime | None] = mapped_column(default=None)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # True once an admin set the timing directly; settings changes then leave it alone.
+    custom: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Job(Base):
@@ -195,7 +197,7 @@ class AnalysisBundle(Base):
 
 
 class InferenceRun(Base):
-    """Immutable once finished (enforced in opsmith.immutability)."""
+    """Immutable once finished (enforced by the flush guard in opsmith.audit_log)."""
 
     __tablename__ = "inference_runs"
     __table_args__ = (UniqueConstraint("service_id", "slot"),)
@@ -361,6 +363,8 @@ class Review(Base):
     comment: Mapped[str] = mapped_column(Text, default="")
     elevated_ack: Mapped[bool] = mapped_column(Boolean, default=False)
     task_version: Mapped[int] = mapped_column(Integer, default=1)
+    # For approvals: hash of the task scope the reviewer approved (review.approval_scope_digest).
+    scope_digest: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = _created()
 
 

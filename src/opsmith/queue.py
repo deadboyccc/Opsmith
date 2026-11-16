@@ -4,12 +4,15 @@
 * Claims are atomic compare-and-set updates (portable across SQLite and PostgreSQL).
 * Failed jobs retry with exponential backoff up to ``max_attempts`` and then move to
   ``dead`` - which is surfaced on the dashboard and notified. Nothing is dropped silently.
-* Leases expire, so a crashed worker's jobs are picked up again.
+* A running job's lease is renewed by a heartbeat for as long as its worker is alive, so a
+  slow job is never handed to a second worker. When a worker dies the lease expires and the
+  job is picked up again - or dead-lettered once its attempts are used up.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import traceback
 import uuid
 from collections.abc import Callable
@@ -93,23 +96,40 @@ class Worker:
         lease_seconds: int = 900,
         kinds: set[str] | None = None,
         on_dead: Callable[[Session, Job], None] | None = None,
+        heartbeat_seconds: float | None = None,
     ) -> None:
         self.db = db
         self.handlers = handlers
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.lease_seconds = lease_seconds
+        # Renew three times per lease, so two renewals may fail before the lease lapses.
+        self.heartbeat_seconds = heartbeat_seconds or max(lease_seconds / 3, 1.0)
         self.kinds = kinds
         self.on_dead = on_dead
 
     # ------------------------------------------------------------------ claiming
     def recover_expired_leases(self) -> int:
+        """Requeue jobs whose worker stopped renewing the lease (it crashed or was killed).
+
+        A job that keeps taking its worker down would otherwise be retried forever, because
+        the failure path never runs for it; once its attempts are used up it is dead-lettered
+        here instead, which audits and notifies like any other dead job.
+        """
+        recovered = 0
         with self.db.session() as s:
-            result = s.execute(
-                update(Job)
-                .where(Job.status == "running", Job.lease_expires_at < utcnow())
-                .values(status="queued", locked_by=None, lease_expires_at=None)
-            )
-            return int(getattr(result, "rowcount", 0) or 0)
+            expired = s.scalars(
+                select(Job).where(Job.status == "running", Job.lease_expires_at < utcnow())
+            ).all()
+            for job in expired:
+                job.locked_by = None
+                job.lease_expires_at = None
+                if job.attempts >= job.max_attempts:
+                    self._mark_dead(s, job, "worker lost the job repeatedly (lease expired)")
+                else:
+                    job.status = "queued"
+                    job.last_error = "lease expired; requeued"
+                recovered += 1
+        return recovered
 
     def _claim(self) -> str | None:
         now = utcnow()
@@ -155,23 +175,66 @@ class Worker:
             results.append(result)
         return results
 
+    def _owns(self, session: Session, job: Job) -> bool:
+        session.refresh(job)
+        return job.status == "running" and job.locked_by == self.worker_id
+
+    def _heartbeat(self, job_id: str, stop: threading.Event) -> None:
+        """Renew the lease while the handler runs. Stops by itself once the job is no longer
+        ours, so a job taken over after a real outage is not held by two workers."""
+        while not stop.wait(self.heartbeat_seconds):
+            try:
+                with self.db.session() as s:
+                    result = s.execute(
+                        update(Job)
+                        .where(
+                            Job.id == job_id,
+                            Job.status == "running",
+                            Job.locked_by == self.worker_id,
+                        )
+                        .values(lease_expires_at=utcnow() + timedelta(seconds=self.lease_seconds))
+                    )
+                    if getattr(result, "rowcount", 0) != 1:
+                        return
+            except Exception as exc:  # a transient DB error must not kill the heartbeat
+                log.warning("lease heartbeat failed", extra={"job_id": job_id, "error": str(exc)})
+
     def _execute(self, job_id: str) -> WorkResult:
+        stop = threading.Event()
+        beat = threading.Thread(
+            target=self._heartbeat, args=(job_id, stop), name=f"lease-{job_id}", daemon=True
+        )
+        beat.start()
+        try:
+            return self._run_handler(job_id)
+        finally:
+            stop.set()
+            beat.join(timeout=5)
+
+    def _run_handler(self, job_id: str) -> WorkResult:
         session = self.db.new_session()
         try:
             job = session.get(Job, job_id)
             assert job is not None
-            handler = self.handlers.get(job.kind)
+            kind = job.kind
+            handler = self.handlers.get(kind)
             if handler is None:
-                raise PermanentFailure(f"no handler registered for job kind {job.kind!r}")
+                raise PermanentFailure(f"no handler registered for job kind {kind!r}")
             result = handler(session, job) or {}
+            if not self._owns(session, job):
+                # The lease was lost (long outage) and another worker has the job now. Keep
+                # this handler's committed work out of the way of the new owner's bookkeeping.
+                session.rollback()
+                log.warning("job finished after losing its lease", extra={"job_id": job_id})
+                return WorkResult(job_id, kind, "lost_lease")
             job.status = "succeeded"
             job.result = result
             job.finished_at = utcnow()
             job.locked_by = None
             job.lease_expires_at = None
             session.commit()
-            log.info("job succeeded", extra={"job_id": job_id, "kind": job.kind})
-            return WorkResult(job_id, job.kind, "succeeded")
+            log.info("job succeeded", extra={"job_id": job_id, "kind": kind})
+            return WorkResult(job_id, kind, "succeeded")
         except RetryLater as exc:
             session.rollback()
             return self._reschedule(job_id, exc)
@@ -239,3 +302,5 @@ def retry_dead_job(session: Session, job: Job) -> None:
     job.deferrals = 0
     job.run_after = utcnow()
     job.finished_at = None
+    job.locked_by = None
+    job.lease_expires_at = None

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +38,50 @@ EDITABLE = {
     "effort_estimate",
 }
 REVIEWER_ROLES = frozenset({"reviewer", "admin"})
+# Opsmith's own branch namespace: plain path segments, nothing git treats specially.
+BRANCH_NAME = re.compile(r"opsmith/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*")
+_TEXT_LIMITS = {
+    "title": 300,
+    "proposed_approach": 20_000,
+    "risk_assessment": 20_000,
+    "branch_name": 200,
+}
+_LIST_LIMIT = 200
+
+
+def valid_branch_name(name: str) -> bool:
+    return (
+        len(name) <= _TEXT_LIMITS["branch_name"]
+        and BRANCH_NAME.fullmatch(name) is not None
+        and ".." not in name
+        and not name.endswith((".lock", "."))
+    )
+
+
+def approval_scope_digest(session: Session, task: Task) -> str:
+    """Hash of everything an approval authorizes: where the change goes and what the agent is
+    told to do. It is stored on the approving review and re-checked by the executor before it
+    starts and again before it pushes, so an approval never covers work the reviewer did not
+    see (edited scope, a different target, findings attached later).
+    """
+    finding_ids = session.scalars(
+        select(Finding.id).where(Finding.task_id == task.id).order_by(Finding.id)
+    ).all()
+    scope = {
+        "task_id": task.id,
+        "repository_id": task.repository_id,
+        "branch_name": task.branch_name,
+        "title": task.title,
+        "category": task.category,
+        "problem_statement": task.problem_statement,
+        "proposed_approach": task.proposed_approach,
+        "acceptance_criteria": list(task.acceptance_criteria),
+        "paths": list(task.paths),
+        "protection": task.protection,
+        "finding_ids": list(finding_ids),
+    }
+    encoded = json.dumps(scope, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 class ReviewRequest(BaseModel):
@@ -59,6 +106,9 @@ class ReviewService:
             raise ReviewError("only reviewers or admins can review tasks")
         if reviewer.tenant_id != task.tenant_id:
             raise ReviewError("task not found")
+        # Lock the row and re-read it: two simultaneous decisions (a double click, or an
+        # approve racing a reject) are serialized, and the loser sees the new status below.
+        session.refresh(task, with_for_update=True)
         if task.status != "in_review":
             raise ReviewError(f"task is {task.status}; only in_review tasks can be reviewed")
         if req.expected_version is not None and req.expected_version != task.version:
@@ -92,6 +142,7 @@ class ReviewService:
                 )
             if task.protection == "elevated" and (reviewer.role != "admin" or not req.elevated_ack):
                 raise ReviewError("protected paths: an admin must approve with elevated_ack")
+            review.scope_digest = approval_scope_digest(session, task)
             session.add(review)
             session.flush()
             transition_task(
@@ -176,13 +227,29 @@ class ReviewService:
             raise ReviewError(f"category must be one of {CATEGORIES}")
         if "effort_estimate" in edits and edits["effort_estimate"] not in {"S", "M", "L"}:
             raise ReviewError("effort_estimate must be S, M or L")
+        for key, limit in _TEXT_LIMITS.items():
+            if key in edits and not (
+                isinstance(edits[key], str) and 0 < len(edits[key].strip()) <= limit
+            ):
+                raise ReviewError(f"{key} must be a non-empty string of at most {limit} chars")
         for key in ("paths", "acceptance_criteria"):
             if key in edits and not (
-                isinstance(edits[key], list) and all(isinstance(x, str) for x in edits[key])
+                isinstance(edits[key], list)
+                and len(edits[key]) <= _LIST_LIMIT
+                and all(isinstance(x, str) and x.strip() for x in edits[key])
             ):
-                raise ReviewError(f"{key} must be a list of strings")
-        if "branch_name" in edits and not str(edits["branch_name"]).startswith("opsmith/"):
-            raise ReviewError("branch_name must start with 'opsmith/'")
+                raise ReviewError(f"{key} must be a list of at most {_LIST_LIMIT} strings")
+        if "acceptance_criteria" in edits and not edits["acceptance_criteria"]:
+            raise ReviewError("acceptance_criteria cannot be empty")
+        if "paths" in edits and any(
+            p.startswith("/") or ".." in p.split("/") or "\x00" in p for p in edits["paths"]
+        ):
+            raise ReviewError("paths must be relative to the repository root")
+        if "branch_name" in edits and not valid_branch_name(edits["branch_name"]):
+            raise ReviewError(
+                "branch_name must look like 'opsmith/<segment>[/<segment>...]' using letters, "
+                "digits, '.', '_' and '-'"
+            )
         before = {k: getattr(task, k) for k in edits}
         for key, value in edits.items():
             setattr(task, key, value)

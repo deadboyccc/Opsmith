@@ -16,6 +16,8 @@ def render_pr_body(
     *,
     base_url: str = "",
     reviewer: str = "",
+    base_sha: str = "",
+    sandbox: str = "",
 ) -> str:
     def bullet(items: list[str]) -> str:
         return "\n".join(f"- {i}" for i in items) or "- (none)"
@@ -48,7 +50,7 @@ def render_pr_body(
 {bullet([str(c) for c in task.acceptance_criteria])}
 
 ## Verification
-Checks run in the Opsmith sandbox before opening this PR:
+Checks run in the Opsmith sandbox{f" (`{sandbox}`)" if sandbox else ""} before opening this PR:
 
 | Check | Command | Result |
 |---|---|---|
@@ -64,6 +66,7 @@ confidence {task.confidence:.2f})
 ## Traceability
 - Opsmith task: {link} (approved by {reviewer or "a human reviewer"})
 - Execution run: `{run.id}` (attempt {run.attempt}, agent `{run.agent}`)
+- Base commit: {f"`{base_sha}`" if base_sha else "n/a"}
 - Findings: {", ".join(f"`{f}`" for f in prov.get("finding_ids", [])[:10]) or "n/a"}
 - Inference runs: {", ".join(f"`{r}`" for r in prov.get("inference_run_ids", [])) or "n/a"}
 - Audit runs: {", ".join(f"`{r}`" for r in prov.get("audit_run_ids", [])) or "n/a"}

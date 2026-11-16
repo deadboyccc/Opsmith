@@ -1,9 +1,12 @@
 """Execution sandboxes and the confined workspace API exposed to coding agents.
 
-* ``LocalSandbox`` - subprocess with a scrubbed environment (no inherited credentials, HOME
-  inside the workspace), hard timeouts and output caps. For dev/CI.
-* ``DockerSandbox`` - each command runs in a throwaway container with ``--network none``,
-  CPU/memory/pid limits, all capabilities dropped and only the workspace mounted.
+* ``DockerSandbox`` - each command runs in a throwaway container with ``--network none``, a
+  read-only root filesystem, CPU/memory/pid limits, all capabilities dropped, a non-root user
+  and only the workspace mounted. This is the default and the only isolating backend.
+* ``LocalSandbox`` - a plain subprocess with a scrubbed environment, timeouts and output
+  caps. It does **not** isolate anything: the command shares the worker's network, filesystem
+  and user. It exists for development, tests and the offline demo, and the executor refuses to
+  use it for repositories that are not on the ``local`` SCM provider.
 
 Agents never receive a shell: they get ``Workspace`` file operations confined to the
 checkout and may only invoke the repository's *configured* check commands by name.
@@ -11,8 +14,10 @@ checkout and may only invoke the repository's *configured* check commands by nam
 
 from __future__ import annotations
 
+import contextlib
 import os
-import shlex
+import shutil
+import signal
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -21,6 +26,16 @@ from typing import Protocol
 
 MAX_OUTPUT = 20_000
 MAX_WRITE_BYTES = 512_000
+MAX_READ_BYTES = 5 * 1024 * 1024
+SANDBOX_BACKENDS = ("docker", "local")
+# Backends that actually confine what a command can reach. Anything else is development-only.
+ISOLATING_BACKENDS = frozenset({"docker"})
+# Entries at the top of the checkout that agents may never read, write or list.
+RESERVED_DIRS = frozenset({".git", ".opsmith-home"})
+
+
+class SandboxUnavailable(RuntimeError):
+    """The configured sandbox backend cannot run commands on this host."""
 
 
 @dataclass
@@ -61,30 +76,38 @@ def _cap(text: str) -> str:
 
 
 class LocalSandbox:
+    """Development-only: scrubs the environment but provides no isolation."""
+
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self.sandbox_id = f"local-{uuid.uuid4().hex[:10]}"
 
     def run(self, command: str, timeout: int = 600) -> CommandResult:
         # Commands come from repository configuration set by admins, never from the agent.
+        # The command gets its own process group so a timeout kills everything it started,
+        # not just the shell.
+        proc = subprocess.Popen(
+            ["sh", "-c", command],
+            cwd=self.root,
+            env=scrubbed_env(self.root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                ["sh", "-c", command],
-                cwd=self.root,
-                env=scrubbed_env(self.root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            out = (
-                (exc.stdout or b"").decode()
-                if isinstance(exc.stdout, bytes)
-                else (exc.stdout or "")
-            )
-            return CommandResult(command, 124, _cap(out), timed_out=True)
-        return CommandResult(command, proc.returncode, _cap(proc.stdout + proc.stderr))
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:  # a child escaped the group and holds the pipe
+                proc.kill()
+                out = ""
+            return CommandResult(command, 124, _cap(out or ""), timed_out=True)
+        return CommandResult(command, proc.returncode, _cap(out or ""))
 
 
 class DockerSandbox:
@@ -94,18 +117,26 @@ class DockerSandbox:
         self.cpus = cpus
         self.memory = memory
         self.sandbox_id = f"docker-{uuid.uuid4().hex[:10]}"
+        self._runs = 0
 
-    def docker_command(self, command: str) -> list[str]:
+    def docker_command(self, command: str, name: str | None = None) -> list[str]:
         return [
             "docker",
             "run",
             "--rm",
+            "--init",
+            *(["--name", name] if name else []),
             "--network",
             "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,exec,nosuid,nodev,size=512m",  # noqa: S108 - a path inside the container
             "--cpus",
             self.cpus,
             "--memory",
             self.memory,
+            "--memory-swap",
+            self.memory,  # equal to --memory: no swap on top of the limit
             "--pids-limit",
             "512",
             "--cap-drop",
@@ -118,6 +149,8 @@ class DockerSandbox:
             "HOME=/workspace/.opsmith-home",
             "-e",
             "CI=1",
+            "-e",
+            "PYTHONDONTWRITEBYTECODE=1",
             "-v",
             f"{self.root}:/workspace",
             "-w",
@@ -131,25 +164,26 @@ class DockerSandbox:
         ]
 
     def run(self, command: str, timeout: int = 600) -> CommandResult:
+        (self.root / ".opsmith-home").mkdir(exist_ok=True)
+        self._runs += 1
+        name = f"opsmith-{self.sandbox_id}-{self._runs}"
         try:
             proc = subprocess.run(
-                self.docker_command(command),
-                capture_output=True,
+                self.docker_command(command, name),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 timeout=timeout,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
-            ids = subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"label=opsmith.sandbox={self.sandbox_id}"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout.split()
-            if ids:
-                subprocess.run(["docker", "kill", *ids], capture_output=True, check=False)
-            return CommandResult(command, 124, "timed out", timed_out=True)
-        return CommandResult(command, proc.returncode, _cap(proc.stdout + proc.stderr))
+        except subprocess.TimeoutExpired as exc:
+            # Killing the client does not stop the container; kill it by name (--rm removes it).
+            subprocess.run(["docker", "kill", name], capture_output=True, check=False, timeout=60)
+            raw = exc.stdout or ""
+            out = raw.decode(errors="replace") if isinstance(raw, bytes) else raw
+            return CommandResult(command, 124, _cap(out) or "timed out", timed_out=True)
+        return CommandResult(command, proc.returncode, _cap(proc.stdout or ""))
 
 
 class WorkspaceError(ValueError):
@@ -173,7 +207,7 @@ class Workspace:
         if not target.is_relative_to(self.root):
             raise WorkspaceError(f"path escapes the workspace: {rel!r}")
         parts = target.relative_to(self.root).parts
-        if parts and parts[0] in {".git", ".opsmith-home"}:
+        if parts and parts[0] in RESERVED_DIRS:
             raise WorkspaceError(f"path is not editable: {rel!r}")
         return target
 
@@ -182,7 +216,7 @@ class Workspace:
         out: list[str] = []
         for path in sorted(base.rglob("*")):
             relp = path.relative_to(self.root)
-            if relp.parts and relp.parts[0] in {".git", ".opsmith-home"}:
+            if relp.parts and relp.parts[0] in RESERVED_DIRS:
                 continue
             if path.is_file():
                 out.append(relp.as_posix())
@@ -194,6 +228,8 @@ class Workspace:
         path = self.resolve(rel)
         if not path.is_file():
             raise WorkspaceError(f"no such file: {rel}")
+        if path.stat().st_size > MAX_READ_BYTES:
+            raise WorkspaceError(f"file too large to read: {rel}")
         text = path.read_text(encoding="utf-8", errors="replace")
         return text if len(text) <= max_chars else text[:max_chars] + "\n...[truncated]"
 
@@ -221,11 +257,12 @@ class Workspace:
 
 def make_sandbox(backend: str, root: Path, image: str) -> Sandbox:
     if backend == "docker":
+        if shutil.which("docker") is None:
+            raise SandboxUnavailable(
+                "the docker sandbox needs the docker CLI on the worker's PATH; install Docker "
+                "or see docs/DEPLOYMENT.md for the sandbox options"
+            )
         return DockerSandbox(root, image)
     if backend == "local":
         return LocalSandbox(root)
-    raise ValueError(f"unknown sandbox backend {backend!r}")
-
-
-def quote(cmd: list[str]) -> str:
-    return " ".join(shlex.quote(c) for c in cmd)
+    raise ValueError(f"unknown sandbox backend {backend!r}; expected one of {SANDBOX_BACKENDS}")

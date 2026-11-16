@@ -26,6 +26,15 @@ def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+# Applied to every command. Hooks, fsmonitor and external diff/pager programs are the ways a
+# repository can make git execute code, so they are switched off regardless of repo config.
+_SAFE_CONFIG = (
+    "core.hooksPath=/dev/null",
+    "core.fsmonitor=false",
+    "protocol.ext.allow=never",
+)
+
+
 def run_git(
     args: list[str],
     cwd: Path | None = None,
@@ -33,8 +42,17 @@ def run_git(
     token: str | None = None,
     timeout: int = 300,
     author: tuple[str, str] | None = None,
+    git_dir: Path | None = None,
 ) -> str:
+    """Run one git command.
+
+    ``git_dir`` pins the repository metadata to a directory other than ``<cwd>/.git`` (with
+    ``cwd`` as the work tree). The executor uses it so that nothing a sandboxed command wrote
+    into the checkout's own ``.git`` (config, hooks, filters) is ever read by the platform.
+    """
     cmd = ["git"]
+    for item in _SAFE_CONFIG:
+        cmd += ["-c", item]
     if token:
         # Credentials go in a transient header for this one command only; they are never
         # written to .git/config or exposed to the sandboxed agent.
@@ -50,6 +68,11 @@ def run_git(
             "GIT_COMMITTER_NAME": name,
             "GIT_COMMITTER_EMAIL": email,
         }
+    if git_dir is not None:
+        if cwd is None:
+            raise GitError("git_dir requires cwd (the work tree)")
+        extra["GIT_DIR"] = str(git_dir)
+        extra["GIT_WORK_TREE"] = str(cwd)
     try:
         proc = subprocess.run(
             cmd,
@@ -70,44 +93,73 @@ def run_git(
     return proc.stdout
 
 
-def head_sha(repo: Path) -> str:
-    return run_git(["rev-parse", "HEAD"], repo).strip()
+def head_sha(repo: Path, *, git_dir: Path | None = None) -> str:
+    return run_git(["rev-parse", "HEAD"], repo, git_dir=git_dir).strip()
 
 
 def changed_files(repo: Path, base: str, head: str) -> list[str]:
-    out = run_git(["diff", "--name-only", f"{base}..{head}"], repo)
-    return [line for line in out.splitlines() if line.strip()]
+    out = run_git(["diff", "--name-only", "-z", f"{base}..{head}"], repo)
+    return [name for name in out.split("\0") if name]
 
 
-def worktree_changes(repo: Path) -> list[str]:
-    out = run_git(["status", "--porcelain", "--untracked-files=all"], repo)
-    files = []
-    for line in out.splitlines():
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        files.append(path.strip('"'))
+def worktree_changes(repo: Path, *, git_dir: Path | None = None) -> list[str]:
+    """Every path that differs from HEAD, including untracked files.
+
+    Parsed from the NUL-delimited porcelain format, where paths are verbatim. The line-based
+    format quotes unusual names and writes renames as ``old -> new``, so a file literally named
+    ``.github/x -> y`` would be reported as ``y`` and slip past the protected-path gate.
+    Both sides of a rename are reported: the old path is changed too (it is deleted).
+    """
+    out = run_git(
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"], repo, git_dir=git_dir
+    )
+    fields = out.split("\0")
+    files: list[str] = []
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status, path = entry[:2], entry[3:]
+        files.append(path)
+        if "R" in status or "C" in status:  # the original path follows as its own field
+            if i < len(fields) and fields[i]:
+                files.append(fields[i])
+            i += 1
     return files
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-def staged_added_lines(repo: Path) -> list[tuple[str, int, str]]:
-    """``(path, line_no, text)`` for every line the staged diff adds (new files included)."""
-    run_git(["add", "-A"], repo)
-    diff = run_git(["diff", "--cached", "-U0", "--no-color", "--no-ext-diff"], repo)
+def staged_added_lines(repo: Path, *, git_dir: Path | None = None) -> list[tuple[str, int, str]]:
+    """``(path, line_no, text)`` for every line the staged diff adds (new files included).
+
+    File headers are only recognised between a ``diff --git`` line and the first hunk, so an
+    added line whose own text starts with ``++ `` (rendered ``+++ ...``) is still scanned.
+    """
+    run_git(["add", "-A"], repo, git_dir=git_dir)
+    diff = run_git(
+        ["diff", "--cached", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"],
+        repo,
+        git_dir=git_dir,
+    )
     out: list[tuple[str, int, str]] = []
     path: str | None = None
     line_no = 0
+    in_header = False
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            target = line[4:]
+        if line.startswith("diff --git "):
+            in_header, path = True, None
+        elif in_header and line.startswith("+++ "):
+            target = line[4:].rstrip("\t")  # git appends a tab when the name has spaces
             path = None if target == "/dev/null" else target.removeprefix("b/")
         elif line.startswith("@@"):
+            in_header = False
             match = _HUNK.match(line)
             line_no = int(match.group(1)) if match else 0
-        elif line.startswith("+") and path is not None:
+        elif not in_header and line.startswith("+") and path is not None:
             out.append((path, line_no, line[1:]))
             line_no += 1
     return out

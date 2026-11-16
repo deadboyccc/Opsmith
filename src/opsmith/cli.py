@@ -63,12 +63,25 @@ def cmd_create_user(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def cmd_apply(args: argparse.Namespace, settings: Settings) -> int:
-    from opsmith.configfile import apply_config, load  # noqa: PLC0415
+    import tomllib  # noqa: PLC0415
 
-    data = load(Path(args.file))
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    from opsmith.configfile import ConfigError, apply_config, load  # noqa: PLC0415
+
+    try:
+        data = load(Path(args.file))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"cannot read {args.file}: {exc}", file=sys.stderr)
+        return 1
     platform = _platform(settings)
-    with platform.db.session() as s:
-        projects = apply_config(s, _tenant(s, args.tenant or data.get("tenant", "default")), data)
+    try:
+        with platform.db.session() as s:
+            tenant = _tenant(s, args.tenant or data.get("tenant", "default"))
+            projects = apply_config(s, tenant, data)
+    except (ConfigError, ValidationError) as exc:  # nothing was written: the session rolled back
+        print(f"invalid configuration in {args.file}:\n{exc}", file=sys.stderr)
+        return 1
     for p in projects:
         print(f"applied project {p.name} ({p.id})")
     return 0
@@ -98,13 +111,25 @@ def _install_signal_handlers() -> None:
     signal.signal(signal.SIGINT, stop)
 
 
+# After an unexpected error (typically the database being briefly unreachable) the loops log
+# and keep going instead of exiting, so one outage does not silently stop the pipeline.
+_ERROR_BACKOFF_SECONDS = 5.0
+
+
 def _worker_loop(settings: Settings, poll: float, once: bool) -> None:
     platform = _platform(settings)
     worker = platform.worker()
     log.info("worker started", extra={"worker_id": worker.worker_id})
     while not _STOP.is_set():
-        worker.recover_expired_leases()
-        results = worker.drain(max_jobs=50)
+        try:
+            worker.recover_expired_leases()
+            results = worker.drain(max_jobs=50)
+        except Exception:
+            if once:
+                raise
+            log.exception("worker loop error; retrying")
+            _STOP.wait(_ERROR_BACKOFF_SECONDS)
+            continue
         if once:
             return
         if not results:
@@ -114,7 +139,14 @@ def _worker_loop(settings: Settings, poll: float, once: bool) -> None:
 def _scheduler_loop(settings: Settings, interval: float, once: bool) -> None:
     platform = _platform(settings)
     while not _STOP.is_set():
-        enqueued = platform.scheduler.tick()
+        try:
+            enqueued = platform.scheduler.tick()
+        except Exception:
+            if once:
+                raise
+            log.exception("scheduler tick failed; retrying")
+            _STOP.wait(_ERROR_BACKOFF_SECONDS)
+            continue
         if enqueued:
             log.info("scheduled jobs", extra={"count": len(enqueued)})
         if once:
@@ -208,7 +240,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    settings = Settings.from_env()
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:  # includes pydantic's ValidationError
+        raise SystemExit(f"invalid OPSMITH_* configuration:\n{exc}") from None
     configure_logging(settings.log_level, settings.log_json)
     result: int = args.func(args, settings)
     return result

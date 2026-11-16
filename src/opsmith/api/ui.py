@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from opsmith import audit_log, queue
-from opsmith.api.deps import COOKIE, SessionDep, get_platform, owned
+from opsmith.api.deps import COOKIE, HUMAN_ROLES, SessionDep, get_platform, owned
 from opsmith.audit_log import Actor
 from opsmith.dashboard import project_summary
 from opsmith.models import (
@@ -49,7 +49,7 @@ class LoginRequired(Exception):
 
 def ui_user(request: Request, session: SessionDep) -> User:
     user = authenticate(session, request.cookies.get(COOKIE))
-    if user is None:
+    if user is None or user.role not in HUMAN_ROLES:  # machine `service` keys have no UI access
         raise LoginRequired
     return user
 
@@ -91,7 +91,8 @@ def login_form(request: Request, error: str | None = None) -> HTMLResponse:
 @router.post("/login")
 def login(request: Request, session: SessionDep, api_key: Annotated[str, Form()]) -> Response:
     _check_origin(request)
-    if authenticate(session, api_key) is None:
+    user = authenticate(session, api_key)
+    if user is None or user.role not in HUMAN_ROLES:
         return RedirectResponse("/ui/login?error=Invalid+API+key", status_code=303)
     resp = RedirectResponse("/ui", status_code=303)
     resp.set_cookie(

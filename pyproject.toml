@@ -50,6 +50,7 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
   "e2e: end-to-end pipeline tests (slower, use git)",
+  "docker: runs real containers; skipped automatically when Docker is unavailable",
 ]
 filterwarnings = ["error::DeprecationWarning:opsmith.*"]
 

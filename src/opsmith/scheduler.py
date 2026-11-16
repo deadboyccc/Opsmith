@@ -7,16 +7,19 @@ ticking twice) never double-enqueues. Missed slots are coalesced into one run.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from opsmith import queue
+from opsmith import audit_log, queue
 from opsmith.db import Database, utcnow
 from opsmith.models import Connector, Project, Repository, Schedule, Service
 from opsmith.schemas import ProjectSettings
+
+log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- cron
 
@@ -38,7 +41,7 @@ class CronExpr:
             raise ValueError(f"cron expression needs 5 fields: {expr!r}")
         m, h, dom, mon, dow = parts
         weekdays = frozenset(0 if d == 7 else d for d in _field(dow, 0, 7))
-        return cls(
+        parsed = cls(
             minutes=_field(m, 0, 59),
             hours=_field(h, 0, 23),
             days=_field(dom, 1, 31),
@@ -47,49 +50,63 @@ class CronExpr:
             dom_restricted=dom != "*",
             dow_restricted=dow != "*",
         )
+        parsed.next_after(datetime(2024, 1, 1))  # rejects dates that never occur, e.g. Feb 31
+        return parsed
 
     def matches(self, dt: datetime) -> bool:
         if dt.minute not in self.minutes or dt.hour not in self.hours:
             return False
-        if dt.month not in self.months:
-            return False
+        return dt.month in self.months and self._day_matches(dt)
+
+    def next_after(self, dt: datetime) -> datetime:
+        candidate = dt.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        # Eight years covers the rarest satisfiable expression (Feb 29 on a given weekday is
+        # not expressible: day-of-month and day-of-week are OR-ed), so this only runs out
+        # for impossible dates.
+        for _ in range(8 * 366):
+            if candidate.month in self.months and self._day_matches(candidate):
+                day_end = candidate.replace(hour=23, minute=59)
+                while candidate <= day_end:
+                    if candidate.hour in self.hours and candidate.minute in self.minutes:
+                        return candidate
+                    candidate += timedelta(minutes=1)
+            else:
+                candidate = (candidate + timedelta(days=1)).replace(hour=0, minute=0)
+        raise ValueError("cron expression never matches a real date")
+
+    def _day_matches(self, dt: datetime) -> bool:
         dom_ok = dt.day in self.days
         dow_ok = ((dt.weekday() + 1) % 7) in self.weekdays
         if self.dom_restricted and self.dow_restricted:
             return dom_ok or dow_ok  # POSIX cron semantics
         return dom_ok and dow_ok
 
-    def next_after(self, dt: datetime) -> datetime:
-        candidate = dt.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        for _ in range(366 * 24 * 60):
-            if self.matches(candidate):
-                return candidate
-            candidate += timedelta(minutes=1)
-        raise ValueError("cron expression never matches")
-
 
 def _field(spec: str, lo: int, hi: int) -> frozenset[int]:
     values: set[int] = set()
-    for item in spec.split(","):
-        step = 1
-        part = item
-        if "/" in item:
-            part, step_s = item.split("/", 1)
-            step = int(step_s)
-            if step <= 0:
-                raise ValueError("cron step must be positive")
-        if part == "*":
-            start, end = lo, hi
-        elif "-" in part:
-            a, b = part.split("-", 1)
-            start, end = int(a), int(b)
-        else:
-            start = end = int(part)
-            if step != 1:
-                end = hi
-        if start < lo or end > hi or start > end:
-            raise ValueError(f"cron value out of range in {spec!r}")
-        values.update(range(start, end + 1, step))
+    try:
+        for item in spec.split(","):
+            step = 1
+            part = item
+            if "/" in item:
+                part, step_s = item.split("/", 1)
+                step = int(step_s)
+                if step <= 0:
+                    raise ValueError("cron step must be positive")
+            if part == "*":
+                start, end = lo, hi
+            elif "-" in part:
+                a, b = part.split("-", 1)
+                start, end = int(a), int(b)
+            else:
+                start = end = int(part)
+                if "/" in item:
+                    end = hi
+            if start < lo or end > hi or start > end:
+                raise ValueError("value out of range")
+            values.update(range(start, end + 1, step))
+    except ValueError as exc:
+        raise ValueError(f"invalid cron field {spec!r}: {exc}") from None
     return frozenset(values)
 
 
@@ -101,9 +118,10 @@ def compute_next(schedule: Schedule, after: datetime) -> datetime:
         return CronExpr.parse(schedule.cron).next_after(after)
     if not schedule.interval_seconds:
         raise ValueError(f"schedule {schedule.id} has neither cron nor interval")
-    nxt = schedule.next_run_at + timedelta(seconds=schedule.interval_seconds)
-    while nxt <= after:  # coalesce missed slots
-        nxt += timedelta(seconds=schedule.interval_seconds)
+    interval = timedelta(seconds=schedule.interval_seconds)
+    nxt = schedule.next_run_at + interval
+    if nxt <= after:  # coalesce missed slots, staying on the schedule's own grid
+        nxt += interval * ((after - nxt) // interval + 1)
     return nxt
 
 
@@ -119,11 +137,20 @@ def upsert_schedule(
     payload: dict[str, object] | None = None,
     first_run_at: datetime | None = None,
 ) -> Schedule:
+    """Create the schedule or bring it in line with the given timing.
+
+    A schedule whose timing an admin set directly (``custom``) keeps that timing; only its
+    payload is refreshed. When the timing does change, the next run is recomputed so the new
+    cadence applies immediately instead of after one more run on the old one.
+    """
     if cron:
         CronExpr.parse(cron)  # validate early
+    elif not interval_seconds or interval_seconds <= 0:
+        raise ValueError("a schedule needs a cron expression or a positive interval")
     schedule = session.scalar(
         select(Schedule).where(Schedule.job_kind == job_kind, Schedule.target_id == target_id)
     )
+    created = schedule is None
     if schedule is None:
         schedule = Schedule(
             tenant_id=tenant_id,
@@ -133,13 +160,26 @@ def upsert_schedule(
             next_run_at=first_run_at or utcnow(),
         )
         session.add(schedule)
-    schedule.interval_seconds = interval_seconds
-    schedule.cron = cron
     schedule.payload = dict(payload or {})
-    if cron and first_run_at is None and schedule.last_enqueued_at is None:
-        schedule.next_run_at = CronExpr.parse(cron).next_after(utcnow())
+    if created or not schedule.custom:
+        retimed = not created and (
+            schedule.cron != cron or schedule.interval_seconds != interval_seconds
+        )
+        schedule.interval_seconds = interval_seconds
+        schedule.cron = cron
+        if (created and cron and first_run_at is None) or retimed:
+            reschedule(schedule)
     session.flush()
     return schedule
+
+
+def reschedule(schedule: Schedule, now: datetime | None = None) -> None:
+    """Set the next run from the schedule's current timing, counted from ``now``."""
+    now = now or utcnow()
+    if schedule.cron:
+        schedule.next_run_at = CronExpr.parse(schedule.cron).next_after(now)
+    elif schedule.interval_seconds:
+        schedule.next_run_at = now + timedelta(seconds=schedule.interval_seconds)
 
 
 def ensure_project_schedules(session: Session, project: Project) -> list[Schedule]:
@@ -216,6 +256,22 @@ class Scheduler:
                 select(Schedule).where(Schedule.enabled.is_(True), Schedule.next_run_at <= now)
             ).all()
             for sch in due:
+                try:
+                    next_run = compute_next(sch, now)
+                except ValueError as exc:
+                    # One unusable schedule must not stop every other tenant's schedules.
+                    # Disable it visibly instead of failing the whole tick forever.
+                    sch.enabled = False
+                    log.error("schedule disabled", extra={"schedule_id": sch.id, "error": str(exc)})
+                    audit_log.record(
+                        s,
+                        tenant_id=sch.tenant_id,
+                        entity_type="schedule",
+                        entity_id=sch.id,
+                        action="schedule.disabled",
+                        details={"reason": str(exc), "job_kind": sch.job_kind},
+                    )
+                    continue
                 slot = sch.next_run_at.strftime("%Y%m%dT%H%M%S")
                 payload = {**sch.payload, "slot": slot}
                 job = queue.enqueue(
@@ -226,6 +282,6 @@ class Scheduler:
                     idempotency_key=f"sched:{sch.id}:{slot}",
                 )
                 sch.last_enqueued_at = now
-                sch.next_run_at = compute_next(sch, now)
+                sch.next_run_at = next_run
                 enqueued.append(job.id)
         return enqueued

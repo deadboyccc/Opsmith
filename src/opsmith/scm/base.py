@@ -31,6 +31,17 @@ class SCMError(RuntimeError):
     pass
 
 
+BRANCH_PREFIX = "opsmith/"
+
+
+def check_pushable(repo: Repository, branch: str) -> None:
+    """Opsmith only ever writes to its own branch namespace, never the default branch."""
+    if branch == repo.default_branch:
+        raise SCMError("refusing to push to the default branch")
+    if not branch.startswith(BRANCH_PREFIX):
+        raise SCMError(f"refusing to push outside the {BRANCH_PREFIX!r} branch namespace")
+
+
 class SCMProvider(ABC):
     name: str
 
@@ -39,7 +50,12 @@ class SCMProvider(ABC):
         """Clone (or refresh) the default branch into ``dest`` for read-only analysis."""
 
     @abstractmethod
-    def push_branch(self, repo: Repository, workdir: Path, branch: str) -> None: ...
+    def push_branch(
+        self, repo: Repository, workdir: Path, branch: str, *, git_dir: Path | None = None
+    ) -> None:
+        """Push ``HEAD`` to ``branch``. Implementations must refuse the default branch and
+        anything outside the ``opsmith/`` namespace. ``git_dir`` is the trusted repository
+        metadata to push from when it is not ``<workdir>/.git``."""
 
     @abstractmethod
     def create_pull_request(

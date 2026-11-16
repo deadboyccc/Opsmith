@@ -195,7 +195,11 @@ def run_demo(base: Path, *, verbose: bool = True, database_url: str | None = Non
     base.mkdir(parents=True, exist_ok=True)
     if database_url is None:
         database_url = os.environ.get("OPSMITH_DATABASE_URL", "")
-    settings = Settings(data_dir=base / "data", log_json=False, database_url=database_url)
+    # The demo executes a repository it has just generated itself, on the local SCM provider,
+    # so the unconfined development sandbox is acceptable here (and needs no Docker).
+    settings = Settings(
+        data_dir=base / "data", log_json=False, database_url=database_url, sandbox_backend="local"
+    )
     platform = Platform(settings)
     repo_path = make_repo(base / "repos" / "payments-api")
     logs, metrics = base / "signals" / "logs.jsonl", base / "signals" / "metrics.jsonl"

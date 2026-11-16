@@ -75,17 +75,38 @@ def test_init_create_user_and_apply(env: Path, tmp_path: Path, capsys) -> None:
         assert audit.cron == "30 1 * * *"
 
 
-def test_apply_rejects_unknown_keys(env: Path, tmp_path: Path) -> None:
-    from opsmith.configfile import ConfigError  # noqa: PLC0415
-
+def test_apply_rejects_bad_config_without_writing_anything(
+    env: Path, tmp_path: Path, capsys
+) -> None:
     main(["init", "--tenant", "acme"])
     cfg = tmp_path / "bad.toml"
-    cfg.write_text(
-        '[[projects]]\nname = "p"\n[[projects.connectors]]\nname = "c"\ntype = "loki"\n'
-        'colour = "red"\n'
-    )
-    with pytest.raises(ConfigError, match="unknown keys"):
-        main(["apply", str(cfg), "--tenant", "acme"])
+    bad_configs = {
+        "unknown keys": '[[projects.connectors]]\nname = "c"\ntype = "loki"\ncolour = "red"\n',
+        "interval_seconds": '[[projects.connectors]]\nname = "c"\ntype = "loki"\n'
+        "interval_seconds = 0\n",
+        "reserved for the platform": '[[projects.connectors]]\nname = "c"\ntype = "loki"\n'
+        'credentials_ref = "env:OPSMITH_DATABASE_URL"\n',
+        "outside the secrets directory": '[[projects.repositories]]\nname = "r"\nurl = "x"\n'
+        'credentials_ref = "file:/etc/passwd"\n',
+        "audit_cron": '[projects.settings]\naudit_cron = "0 0 31 2 *"\n',
+        "needs a name": "[[projects.services]]\nowner = 1\n",
+    }
+    for expected, body in bad_configs.items():
+        cfg.write_text(f'[[projects]]\nname = "p"\n{body}')
+        assert main(["apply", str(cfg), "--tenant", "acme"]) == 1, expected
+        assert expected in capsys.readouterr().err
+    cfg.write_text("this is = not [valid toml")
+    assert main(["apply", str(cfg), "--tenant", "acme"]) == 1
+    assert main(["apply", str(tmp_path / "missing.toml"), "--tenant", "acme"]) == 1
+    platform = Platform(Settings(data_dir=env, log_json=False))
+    with platform.db.session() as s:
+        assert s.scalars(select(Project)).all() == []  # every failed apply rolled back
+
+
+def test_invalid_process_settings_exit_cleanly(env: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPSMITH_SANDBOX_BACKEND", "chroot")
+    with pytest.raises(SystemExit, match="OPSMITH_"):
+        main(["scheduler", "--once"])
 
 
 def test_worker_and_scheduler_once(env: Path) -> None:

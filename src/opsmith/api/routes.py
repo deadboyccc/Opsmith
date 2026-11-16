@@ -8,9 +8,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
 from opsmith import audit_log, queue
-from opsmith.api.deps import SessionDep, get_platform, get_principal, owned, require_role, to_dict
+from opsmith.api.deps import (
+    HUMAN_ROLES,
+    SessionDep,
+    get_platform,
+    get_principal,
+    owned,
+    require_role,
+    to_dict,
+)
 from opsmith.audit_log import Actor
 from opsmith.audits import AUDIT_TYPES, registered
+from opsmith.config import CredentialRefError, check_credentials_ref
 from opsmith.connectors import available_types
 from opsmith.dashboard import project_summary
 from opsmith.models import (
@@ -32,11 +41,15 @@ from opsmith.models import (
 from opsmith.platform import Platform
 from opsmith.provenance import task_provenance
 from opsmith.review import ReviewError, ReviewRequest
-from opsmith.scheduler import CronExpr, ensure_project_schedules
+from opsmith.scheduler import CronExpr, ensure_project_schedules, reschedule
 from opsmith.schemas import ProjectSettings
 
 router = APIRouter(prefix="/api/v1")
-Principal = Annotated[User, Depends(get_principal)]
+# Any authenticated principal, including machine `service` keys (used only by /me).
+AnyPrincipal = Annotated[User, Depends(get_principal)]
+# Read access is for people. A `service` key ships with log collectors and may only push
+# signals, so it must not be able to read tasks, configuration or the audit log.
+Principal = Annotated[User, Depends(require_role(*HUMAN_ROLES))]
 Admin = Annotated[User, Depends(require_role("admin"))]
 Reviewer = Annotated[User, Depends(require_role("reviewer", "admin"))]
 PlatformDep = Annotated[Platform, Depends(get_platform)]
@@ -55,33 +68,45 @@ class SettingsPatch(_Strict):
     settings: dict[str, Any]
 
 
+_Name = Annotated[str, Field(min_length=1, max_length=200)]
+_Command = Annotated[str | None, Field(default=None, max_length=500)]
+_CredentialsRef = Annotated[
+    str | None,
+    Field(
+        default=None,
+        max_length=200,
+        description="env:NAME or file:/path inside OPSMITH_SECRETS_DIR; never the secret itself",
+    ),
+]
+
+
 class RepositoryIn(_Strict):
-    name: str
+    name: _Name
     scm_provider: Literal["local", "github"] = "github"
-    url: str
-    full_name: str | None = None
-    default_branch: str = "main"
-    credentials_ref: str | None = Field(None, description="env:NAME or file:/path, never a secret")
-    test_command: str | None = None
-    lint_command: str | None = None
-    build_command: str | None = None
+    url: str = Field(min_length=1, max_length=500)
+    full_name: str | None = Field(None, max_length=200, pattern=r"^[\w.-]+/[\w.-]+$")
+    default_branch: str = Field("main", min_length=1, max_length=100)
+    credentials_ref: _CredentialsRef
+    test_command: _Command
+    lint_command: _Command
+    build_command: _Command
     audit_types: list[str] = Field(default_factory=lambda: list(AUDIT_TYPES[:5]))
 
 
 class ServiceIn(_Strict):
-    name: str
-    environment: str = "production"
-    owner: str | None = None
+    name: _Name
+    environment: str = Field("production", min_length=1, max_length=50)
+    owner: str | None = Field(None, max_length=200)
     repository_id: str | None = None
     path_prefixes: list[str] = Field(default_factory=list)
     inference_interval_hours: float | None = Field(None, gt=0)
 
 
 class ConnectorIn(_Strict):
-    name: str
+    name: _Name
     type: str
     config: dict[str, Any] = Field(default_factory=dict)
-    credentials_ref: str | None = None
+    credentials_ref: _CredentialsRef
     service_id: str | None = None
     interval_seconds: int = Field(900, ge=60)
     enabled: bool = True
@@ -107,11 +132,31 @@ def _refresh_schedules(session: SessionDep, project: Project) -> None:
     ensure_project_schedules(session, project)
 
 
+def _errors(exc: ValidationError) -> list[Any]:
+    # Without the context: it can hold the original exception object, which is not JSON.
+    return list(exc.errors(include_url=False, include_context=False, include_input=False))
+
+
+def _check_ref(ref: str | None) -> None:
+    try:
+        check_credentials_ref(ref)
+    except CredentialRefError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def _conflict_if_exists(session: SessionDep, model: Any, what: str, **where: Any) -> None:
+    query = select(model.id)
+    for key, value in where.items():
+        query = query.where(getattr(model, key) == value)
+    if session.scalar(query) is not None:
+        raise HTTPException(409, f"{what} already exists")
+
+
 # --------------------------------------------------------------------------- meta
 
 
 @router.get("/me")
-def me(user: Principal) -> dict[str, Any]:
+def me(user: AnyPrincipal) -> dict[str, Any]:
     return {"id": user.id, "name": user.name, "role": user.role, "tenant_id": user.tenant_id}
 
 
@@ -128,7 +173,7 @@ def create_project(body: ProjectIn, session: SessionDep, user: Admin) -> dict[st
     try:
         settings = ProjectSettings.model_validate(body.settings)
     except ValidationError as exc:
-        raise HTTPException(422, exc.errors(include_url=False)) from exc
+        raise HTTPException(422, _errors(exc)) from exc
     exists = session.scalar(
         select(Project).where(Project.tenant_id == user.tenant_id, Project.name == body.name)
     )
@@ -171,7 +216,7 @@ def patch_settings(
     try:
         settings = ProjectSettings.model_validate(merged)
     except ValidationError as exc:
-        raise HTTPException(422, exc.errors(include_url=False)) from exc
+        raise HTTPException(422, _errors(exc)) from exc
     project.settings = settings.model_dump(mode="json")
     audit_log.record(
         session,
@@ -194,6 +239,8 @@ def create_repository(
     bad = set(body.audit_types) - set(AUDIT_TYPES)
     if bad:
         raise HTTPException(422, f"unknown audit types: {sorted(bad)}")
+    _check_ref(body.credentials_ref)
+    _conflict_if_exists(session, Repository, "repository", project_id=project.id, name=body.name)
     repo = Repository(tenant_id=user.tenant_id, project_id=project.id, **body.model_dump())
     session.add(repo)
     session.flush()
@@ -220,7 +267,17 @@ def create_service(
 ) -> dict[str, Any]:
     project = _project(session, project_id, user)
     if body.repository_id:
-        owned(session, Repository, body.repository_id, user.tenant_id)
+        repo = owned(session, Repository, body.repository_id, user.tenant_id)
+        if repo.project_id != project.id:
+            raise HTTPException(422, "repository belongs to a different project")
+    _conflict_if_exists(
+        session,
+        Service,
+        "service",
+        project_id=project.id,
+        name=body.name,
+        environment=body.environment,
+    )
     svc = Service(tenant_id=user.tenant_id, project_id=project.id, **body.model_dump())
     session.add(svc)
     session.flush()
@@ -246,7 +303,11 @@ def create_connector(
     if body.type not in types:
         raise HTTPException(422, f"unknown connector type {body.type!r}; known: {sorted(types)}")
     if body.service_id:
-        owned(session, Service, body.service_id, user.tenant_id)
+        svc = owned(session, Service, body.service_id, user.tenant_id)
+        if svc.project_id != project.id:
+            raise HTTPException(422, "service belongs to a different project")
+    _check_ref(body.credentials_ref)
+    _conflict_if_exists(session, Connector, "connector", project_id=project.id, name=body.name)
     conn = Connector(
         tenant_id=user.tenant_id, project_id=project.id, kind=types[body.type], **body.model_dump()
     )
@@ -280,7 +341,7 @@ def push_signals(
     try:
         batches = platform.ingestion.ingest_push(session, conn, records)
     except ValidationError as exc:
-        raise HTTPException(422, exc.errors(include_url=False)) from exc
+        raise HTTPException(422, _errors(exc)) from exc
     return {"batches": [b.id for b in batches], "records": sum(b.record_count for b in batches)}
 
 
@@ -298,6 +359,8 @@ def update_schedule(
     schedule_id: str, body: ScheduleUpdate, session: SessionDep, user: Admin
 ) -> dict[str, Any]:
     sch = owned(session, Schedule, schedule_id, user.tenant_id)
+    if body.cron is not None and body.interval_seconds is not None:
+        raise HTTPException(422, "set either cron or interval_seconds, not both")
     if body.cron is not None:
         try:
             CronExpr.parse(body.cron)
@@ -306,8 +369,20 @@ def update_schedule(
         sch.cron, sch.interval_seconds = body.cron, None
     if body.interval_seconds is not None:
         sch.interval_seconds, sch.cron = body.interval_seconds, None
+    if body.cron is not None or body.interval_seconds is not None:
+        sch.custom = True  # survives later settings changes
+        reschedule(sch)
     if body.enabled is not None:
         sch.enabled = body.enabled
+    audit_log.record(
+        session,
+        tenant_id=user.tenant_id,
+        entity_type="schedule",
+        entity_id=sch.id,
+        action="schedule.updated",
+        actor=Actor("user", user.id),
+        details=body.model_dump(exclude_none=True),
+    )
     return to_dict(sch)
 
 
@@ -316,15 +391,17 @@ def trigger(project_id: str, body: TriggerIn, session: SessionDep, user: Admin) 
     """Run a pipeline stage now (still queued, idempotent, retried like scheduled runs)."""
     project = _project(session, project_id, user)
     payload: dict[str, Any] = {"project_id": project.id}
-    if body.job == "ingest":
-        conn = owned(session, Connector, body.target_id or "", user.tenant_id)
-        payload["connector_id"] = conn.id
-    elif body.job == "inference":
-        svc = owned(session, Service, body.target_id or "", user.tenant_id)
-        payload.update(service_id=svc.id, slot=f"manual-{uuid.uuid4().hex[:8]}")
-    elif body.job == "audit":
-        repo = owned(session, Repository, body.target_id or "", user.tenant_id)
-        payload.update(repository_id=repo.id, mode=body.mode)
+    targets: dict[str, Any] = {"ingest": Connector, "inference": Service, "audit": Repository}
+    if body.job in targets:
+        target = owned(session, targets[body.job], body.target_id or "", user.tenant_id)
+        if target.project_id != project.id:
+            raise HTTPException(404, f"{targets[body.job].__name__} not found")
+        if body.job == "ingest":
+            payload["connector_id"] = target.id
+        elif body.job == "inference":
+            payload.update(service_id=target.id, slot=f"manual-{uuid.uuid4().hex[:8]}")
+        else:
+            payload.update(repository_id=target.id, mode=body.mode)
     job = queue.enqueue(
         session,
         tenant_id=user.tenant_id,
@@ -367,7 +444,7 @@ def _list(
 
 @router.get("/projects/{project_id}/inference-runs")
 def inference_runs(
-    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, le=500)
+    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, ge=1, le=500)
 ) -> list[dict[str, Any]]:
     return _list(
         session, InferenceRun, project_id, user, order=InferenceRun.started_at.desc(), limit=limit
@@ -376,7 +453,7 @@ def inference_runs(
 
 @router.get("/projects/{project_id}/audit-runs")
 def audit_runs(
-    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, le=500)
+    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, ge=1, le=500)
 ) -> list[dict[str, Any]]:
     return _list(session, AuditRun, project_id, user, order=AuditRun.started_at.desc(), limit=limit)
 
@@ -387,7 +464,7 @@ def leads(
     session: SessionDep,
     user: Principal,
     state: str | None = None,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[dict[str, Any]]:
     return _list(
         session, Lead, project_id, user, order=Lead.updated_at.desc(), limit=limit, state=state
@@ -400,7 +477,7 @@ def findings(
     session: SessionDep,
     user: Principal,
     status: str | None = None,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[dict[str, Any]]:
     return _list(
         session,
@@ -419,7 +496,7 @@ def tasks(
     session: SessionDep,
     user: Principal,
     status: str | None = None,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[dict[str, Any]]:
     return _list(
         session, Task, project_id, user, order=Task.score.desc(), limit=limit, status=status
@@ -428,7 +505,7 @@ def tasks(
 
 @router.get("/projects/{project_id}/executions")
 def executions(
-    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, le=500)
+    project_id: str, session: SessionDep, user: Principal, limit: int = Query(50, ge=1, le=500)
 ) -> list[dict[str, Any]]:
     return _list(
         session, ExecutionRun, project_id, user, order=ExecutionRun.started_at.desc(), limit=limit
@@ -474,7 +551,7 @@ def jobs(
     session: SessionDep,
     user: Principal,
     status: str | None = None,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[dict[str, Any]]:
     query = select(Job).where(Job.tenant_id == user.tenant_id)
     if status:
@@ -508,7 +585,7 @@ def get_audit_log(
     session: SessionDep,
     user: Principal,
     entity_id: str | None = None,
-    limit: int = Query(200, le=2000),
+    limit: int = Query(200, ge=1, le=2000),
 ) -> list[dict[str, Any]]:
     query = select(AuditLog).where(AuditLog.tenant_id == user.tenant_id)
     if entity_id:

@@ -12,10 +12,16 @@ from typing import Any
 
 import httpx
 
-from opsmith.config import resolve_credential
+from opsmith.config import CredentialRefError, resolve_tenant_credential
 from opsmith.gitutil import run_git
 from opsmith.models import Repository
-from opsmith.scm.base import PullRequestRef, PullRequestStatus, SCMError, SCMProvider
+from opsmith.scm.base import (
+    PullRequestRef,
+    PullRequestStatus,
+    SCMError,
+    SCMProvider,
+    check_pushable,
+)
 
 
 class GitHubSCM(SCMProvider):
@@ -28,7 +34,10 @@ class GitHubSCM(SCMProvider):
         self.api_url = api_url.rstrip("/")
 
     def _token(self, repo: Repository) -> str:
-        token = resolve_credential(repo.credentials_ref)
+        try:
+            token = resolve_tenant_credential(repo.credentials_ref)
+        except CredentialRefError as exc:
+            raise SCMError(str(exc)) from exc
         if not token:
             raise SCMError(f"no token resolvable from {repo.credentials_ref!r} for {repo.name}")
         return token
@@ -80,10 +89,18 @@ class GitHubSCM(SCMProvider):
             )
         return dest
 
-    def push_branch(self, repo: Repository, workdir: Path, branch: str) -> None:
-        if branch == repo.default_branch:
-            raise SCMError("refusing to push to the default branch")
-        run_git(["push", repo.url, f"HEAD:refs/heads/{branch}"], workdir, token=self._token(repo))
+    def push_branch(
+        self, repo: Repository, workdir: Path, branch: str, *, git_dir: Path | None = None
+    ) -> None:
+        check_pushable(repo, branch)
+        # Forced: the branch belongs to Opsmith, and a retry after a failed PR creation must be
+        # able to replace the commit an earlier attempt pushed.
+        run_git(
+            ["push", "--force", repo.url, f"HEAD:refs/heads/{branch}"],
+            workdir,
+            token=self._token(repo),
+            git_dir=git_dir,
+        )
 
     # ------------------------------------------------------------------ pull requests
     def create_pull_request(

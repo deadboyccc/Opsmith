@@ -3,9 +3,10 @@
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from opsmith import __version__
 from opsmith.api import routes, ui
@@ -30,6 +31,11 @@ def create_app(platform: Platform | None = None) -> FastAPI:
     @app.exception_handler(ui.LoginRequired)
     def _login_required(_request: Request, _exc: ui.LoginRequired) -> Response:
         return RedirectResponse("/ui/login", status_code=303)
+
+    @app.exception_handler(IntegrityError)
+    def _conflict(_request: Request, _exc: IntegrityError) -> Response:
+        # A uniqueness race (two identical creates at once): report it as a conflict, not a 500.
+        return JSONResponse({"detail": "conflict with an existing record"}, status_code=409)
 
     @app.get("/", include_in_schema=False)
     def root() -> Response:

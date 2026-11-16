@@ -18,7 +18,13 @@ from opsmith.db import utcnow
 from opsmith.executor.sandbox import LocalSandbox
 from opsmith.gitutil import run_git
 from opsmith.models import Repository
-from opsmith.scm.base import PullRequestRef, PullRequestStatus, SCMError, SCMProvider
+from opsmith.scm.base import (
+    PullRequestRef,
+    PullRequestStatus,
+    SCMError,
+    SCMProvider,
+    check_pushable,
+)
 
 _LOCK = threading.Lock()
 
@@ -51,10 +57,13 @@ class LocalSCM(SCMProvider):
             run_git(["clone", "--branch", repo.default_branch, repo.url, str(dest)])
         return dest
 
-    def push_branch(self, repo: Repository, workdir: Path, branch: str) -> None:
-        if branch == repo.default_branch:
-            raise SCMError("refusing to push to the default branch")
-        run_git(["push", "--force", repo.url, f"HEAD:refs/heads/{branch}"], workdir)
+    def push_branch(
+        self, repo: Repository, workdir: Path, branch: str, *, git_dir: Path | None = None
+    ) -> None:
+        check_pushable(repo, branch)
+        run_git(
+            ["push", "--force", repo.url, f"HEAD:refs/heads/{branch}"], workdir, git_dir=git_dir
+        )
 
     def create_pull_request(
         self, repo: Repository, *, branch: str, title: str, body: str

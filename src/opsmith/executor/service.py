@@ -2,14 +2,21 @@
 
 Hard gates, checked before any code is touched and again before anything is pushed:
 
-1. the task is ``approved`` and its latest review is an approval by a human reviewer/admin;
+1. the task is ``approved`` and its latest review is an approval by a human reviewer/admin,
+   and the task still has exactly the scope that review approved (``scope_digest``);
 2. ``excluded`` protected paths are never changed; ``elevated`` ones require an admin
    approval with ``elevated_ack``;
-3. tasks touching the same files as a running execution are serialized;
-4. the diff is secret-scanned and must pass the repository's configured checks.
+3. the sandbox backend isolates enough for the repository (``local`` is development-only);
+4. tasks touching the same files as a running execution are serialized;
+5. the repository's configured checks pass, and the resulting diff is gated on protected
+   paths and credential-like values *after* the last sandboxed command has run.
 
 The long-running part (clone, agent, checks) runs *outside* any DB transaction; state
 changes are short transactions, so a crash leaves the task in a consistent state.
+
+Git metadata is kept away from sandboxed code: the checkout's ``.git`` is snapshotted before
+the agent starts and every platform git command afterwards reads only that snapshot, so
+hooks, config or filters planted in the workspace are never executed by the worker.
 """
 
 from __future__ import annotations
@@ -32,12 +39,18 @@ from opsmith.config import Settings
 from opsmith.db import Database, utcnow
 from opsmith.executor.agents import AgentBudget, AgentResult, AgentTask, CodingAgent
 from opsmith.executor.pr import render_pr_body
-from opsmith.executor.sandbox import Workspace, make_sandbox
+from opsmith.executor.sandbox import (
+    ISOLATING_BACKENDS,
+    SandboxUnavailable,
+    Workspace,
+    make_sandbox,
+)
 from opsmith.gitutil import GitError, head_sha, run_git, staged_added_lines, worktree_changes
 from opsmith.models import ExecutionRun, Finding, Project, Repository, Review, Task
 from opsmith.observability import METRICS
 from opsmith.protection import classify, protected_hits
 from opsmith.redaction import SECRET_DETECTORS
+from opsmith.review import BRANCH_NAME, approval_scope_digest
 from opsmith.schemas import ProjectSettings
 from opsmith.scm import SCMError, SCMRegistry
 
@@ -59,6 +72,10 @@ def latest_review(session: Session, task_id: str) -> Review | None:
     )
 
 
+class ApprovalSuperseded(ApprovalError):
+    """A newer approval exists; its own execute job carries the work."""
+
+
 def assert_approved(session: Session, task: Task, review_id: str | None = None) -> Review:
     """The single gate that every code change goes through."""
     if task.status not in {"approved", "executing"}:
@@ -67,7 +84,7 @@ def assert_approved(session: Session, task: Task, review_id: str | None = None) 
     if review is None or review.decision not in APPROVE_DECISIONS:
         raise ApprovalError(f"task {task.id} has no recorded human approval")
     if review_id is not None and review.id != review_id:
-        raise ApprovalError("approval superseded by a newer review")
+        raise ApprovalSuperseded("approval superseded by a newer review")
     if review.reviewer_role not in HUMAN_APPROVER_ROLES:
         raise ApprovalError("approval was not made by a human reviewer")
     if task.protection == "excluded":
@@ -76,7 +93,22 @@ def assert_approved(session: Session, task: Task, review_id: str | None = None) 
         review.elevated_ack and review.reviewer_role == "admin"
     ):
         raise ApprovalError("protected paths require an elevated admin approval")
+    # The approval covers the task exactly as the reviewer saw it. Any later change to what
+    # the agent is told to do (scope, approach, target, attached findings) voids it.
+    if not review.scope_digest or review.scope_digest != approval_scope_digest(session, task):
+        raise ApprovalError("task changed after it was approved; it needs a new review")
     return review
+
+
+def sandbox_policy_error(backend: str, repo: Repository) -> str | None:
+    """``local`` runs repository commands unconfined on the worker, so it is only accepted for
+    the ``local`` SCM provider (development, tests, the demo). Fails closed."""
+    if backend in ISOLATING_BACKENDS or repo.scm_provider == "local":
+        return None
+    return (
+        f"sandbox policy: the {backend!r} sandbox does not isolate repository code, so it "
+        f"cannot run {repo.scm_provider!r} repositories; set OPSMITH_SANDBOX_BACKEND=docker"
+    )
 
 
 @dataclass
@@ -92,6 +124,7 @@ class AttemptOutcome:
     checks: list[dict[str, Any]] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
     agent: AgentResult | None = None
+    sandbox_id: str | None = None
 
 
 AgentFactory = Callable[[ProjectSettings], CodingAgent]
@@ -136,14 +169,7 @@ class ExecutionService:
             try:
                 review = assert_approved(s, task, review_id)
             except ApprovalError as exc:
-                audit_log.record(
-                    s,
-                    tenant_id=task.tenant_id,
-                    entity_type="task",
-                    entity_id=task.id,
-                    action="execution.refused",
-                    details={"reason": str(exc)},
-                )
+                self._refuse(s, task, exc)
                 return {"refused": str(exc)}
             project = s.get(Project, task.project_id)
             assert project is not None
@@ -155,7 +181,7 @@ class ExecutionService:
         outcome: AttemptOutcome | None = None
         for attempt in range(1, self.max_attempts + 1):
             run_id = self._start_run(task_id, review_id, attempt)
-            outcome = self._attempt(task_id, run_id, settings, reviewer)
+            outcome = self._attempt(task_id, run_id, review_id, settings, reviewer)
             self._finish_run(run_id, outcome)
             if outcome.success or not outcome.retryable:
                 break
@@ -164,6 +190,34 @@ class ExecutionService:
         return {"success": outcome.success, "pr_url": outcome.pr_url, "error": outcome.error}
 
     # ------------------------------------------------------------------ gates
+    @staticmethod
+    def _refuse(s: Session, task: Task, exc: ApprovalError) -> None:
+        """Record a refused execution. A task that was waiting to run goes back to the review
+        queue with the reason, so a void approval never leaves it parked in ``approved``."""
+        reason = str(exc)
+        audit_log.record(
+            s,
+            tenant_id=task.tenant_id,
+            entity_type="task",
+            entity_id=task.id,
+            action="execution.refused",
+            details={"reason": reason},
+        )
+        if isinstance(exc, ApprovalSuperseded) or task.status not in {"approved", "executing"}:
+            return
+        task.execution_report = {"error": f"approval: {reason}", "at": utcnow().isoformat()}
+        if task.status == "executing":
+            transition_task(s, task, "failed", details={"error": reason})
+        transition_task(s, task, "in_review", details={"reason": f"execution refused: {reason}"})
+        notifications.notify(
+            s,
+            tenant_id=task.tenant_id,
+            project_id=task.project_id,
+            event="task.execution_failed",
+            subject=f"Execution refused: {task.title}",
+            body=reason,
+        )
+
     def _check_concurrency(self, s: Session, task: Task, settings: ProjectSettings) -> None:
         running = s.scalars(
             select(Task).where(
@@ -213,6 +267,7 @@ class ExecutionService:
             assert run is not None
             run.status = "succeeded" if out.success else "failed"
             run.error = out.error
+            run.sandbox_id = out.sandbox_id
             run.branch = out.branch or run.branch
             run.commit_sha = out.commit_sha
             run.pr_url, run.pr_number = out.pr_url, out.pr_number
@@ -228,7 +283,7 @@ class ExecutionService:
             METRICS.inc("opsmith_executions_total", outcome=run.status)
 
     def _attempt(
-        self, task_id: str, run_id: str, settings: ProjectSettings, reviewer: str
+        self, task_id: str, run_id: str, review_id: str, settings: ProjectSettings, reviewer: str
     ) -> AttemptOutcome:
         with self.db.session() as s:
             task = s.get(Task, task_id)
@@ -240,9 +295,24 @@ class ExecutionService:
             agent_task = self._agent_task(s, task)
             branch = task.branch_name
             s.expunge(task)
-        tmp = Path(tempfile.mkdtemp(prefix="opsmith-exec-"))
+        policy = sandbox_policy_error(self.settings.sandbox_backend, repo)
+        if policy:
+            return AttemptOutcome(False, False, policy)
+        if not BRANCH_NAME.fullmatch(branch) or branch == repo.default_branch:
+            return AttemptOutcome(False, False, f"refusing to use branch name {branch!r}")
+        if self.settings.work_dir is not None:
+            self.settings.work_dir.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix="opsmith-exec-", dir=self.settings.work_dir))
         steps: list[dict[str, Any]] = []
+        result: AgentResult | None = None
+        sandbox_id: str | None = None
         started = time.monotonic()
+
+        def fail(error: str, *, retryable: bool = False, **extra: Any) -> AttemptOutcome:
+            return AttemptOutcome(
+                False, retryable, error, steps=steps, agent=result, sandbox_id=sandbox_id, **extra
+            )
+
         try:
             provider = self.scm.for_provider(repo.scm_provider)
             workdir = provider.checkout(repo, tmp / "repo")
@@ -253,10 +323,16 @@ class ExecutionService:
             exclude.parent.mkdir(parents=True, exist_ok=True)
             with exclude.open("a") as fh:  # sandbox HOME lives in the checkout; never commit it
                 fh.write("\n.opsmith-home/\n")
-            steps.append({"step": "checkout", "branch": branch, "base": head_sha(workdir)})
+            base = head_sha(workdir)
+            # From here on the platform only trusts this snapshot of the repository metadata.
+            # Sandboxed commands can write anything into the workspace, including its .git.
+            git_dir = tmp / "trusted.git"
+            shutil.copytree(workdir / ".git", git_dir, symlinks=True)
+            steps.append({"step": "checkout", "branch": branch, "base": base})
             sandbox = make_sandbox(
                 self.settings.sandbox_backend, workdir, self.settings.sandbox_image
             )
+            sandbox_id = sandbox.sandbox_id
             checks = {
                 "build": repo.build_command or "",
                 "lint": repo.lint_command or "",
@@ -272,32 +348,9 @@ class ExecutionService:
             )
             result = agent.run(agent_task, ws, budget)
             if time.monotonic() - started > settings.budgets.max_execution_seconds:
-                return AttemptOutcome(
-                    False, False, "execution time budget exceeded", steps=steps, agent=result
-                )
-            changed = [f for f in worktree_changes(workdir) if not f.startswith(".opsmith-home")]
+                return fail("execution time budget exceeded")
             if not result.success:
-                return AttemptOutcome(
-                    False,
-                    result.retryable,
-                    f"agent: {result.summary}",
-                    changed_files=changed,
-                    steps=steps,
-                    agent=result,
-                )
-            if not changed:
-                return AttemptOutcome(
-                    False,
-                    False,
-                    "agent reported success but changed nothing",
-                    steps=steps,
-                    agent=result,
-                )
-            gate = self._diff_gates(task_id, changed, settings, workdir)
-            if gate:
-                return AttemptOutcome(
-                    False, False, gate, changed_files=changed, steps=steps, agent=result
-                )
+                return fail(f"agent: {result.summary}", retryable=result.retryable)
             # Authoritative verification by the platform, independent of the agent's claims.
             check_rows: list[dict[str, Any]] = []
             for name in ("build", "lint", "test"):
@@ -311,39 +364,53 @@ class ExecutionService:
                             "output": res.output[-3000:],
                         }
                     )
+            # Nothing sandboxed runs after this point, so what is gated is what is committed.
+            shutil.rmtree(workdir / ".opsmith-home", ignore_errors=True)
+            changed = [
+                f
+                for f in worktree_changes(workdir, git_dir=git_dir)
+                if not f.startswith(".opsmith-home")
+            ]
             if any(c["exit_code"] != 0 for c in check_rows):
                 failed = [c["name"] for c in check_rows if c["exit_code"] != 0]
-                return AttemptOutcome(
-                    False,
-                    True,
+                return fail(
                     f"checks failed: {', '.join(failed)}",
+                    retryable=True,
                     changed_files=changed,
                     checks=check_rows,
-                    steps=steps,
-                    agent=result,
                 )
-            shutil.rmtree(workdir / ".opsmith-home", ignore_errors=True)
-            run_git(["add", "-A"], workdir)
+            if not changed:
+                return fail("agent reported success but changed nothing")
+            gate = self._diff_gates(task_id, changed, settings, workdir, git_dir)
+            if gate:
+                return fail(gate, changed_files=changed, checks=check_rows)
             message = f"{agent_task.title}\n\n{result.summary}\n\nOpsmith-Task: {task_id}\n"
             run_git(
-                ["commit", "-m", message],
+                ["commit", "--no-verify", "-m", message],
                 workdir,
                 author=(self.settings.bot_name, self.settings.bot_email),
+                git_dir=git_dir,
             )
-            sha = head_sha(workdir)
-            provider.push_branch(repo, workdir, branch)
-            steps.append({"step": "push", "branch": branch, "sha": sha})
+            sha = head_sha(workdir, git_dir=git_dir)
             with self.db.session() as s:
                 task_row = s.get(Task, task_id)
                 run_row = s.get(ExecutionRun, run_id)
                 assert task_row is not None
                 assert run_row is not None
-                # Re-check the approval right before the outward-facing action.
-                assert_approved(s, task_row)
+                # Re-check the approval right before the first outward-facing action.
+                assert_approved(s, task_row, review_id)
                 body = render_pr_body(
-                    task_row, run_row, check_rows, base_url=self.base_url, reviewer=reviewer
+                    task_row,
+                    run_row,
+                    check_rows,
+                    base_url=self.base_url,
+                    reviewer=reviewer,
+                    base_sha=base,
+                    sandbox=self.settings.sandbox_backend,
                 )
                 title = f"[opsmith] {task_row.title}"[:250]
+            provider.push_branch(repo, workdir, branch, git_dir=git_dir)
+            steps.append({"step": "push", "branch": branch, "sha": sha})
             pr = provider.create_pull_request(repo, branch=branch, title=title, body=body)
             steps.append({"step": "pull_request", "url": pr.url})
             return AttemptOutcome(
@@ -358,20 +425,28 @@ class ExecutionService:
                 check_rows,
                 steps,
                 result,
+                sandbox_id,
             )
         except ApprovalError as exc:
-            return AttemptOutcome(False, False, f"approval: {exc}", steps=steps)
+            return fail(f"approval: {exc}")
+        except SandboxUnavailable as exc:
+            return fail(f"sandbox unavailable: {exc}")
         except (GitError, SCMError, OSError) as exc:
             log.warning("execution attempt failed", extra={"task_id": task_id, "error": str(exc)})
-            return AttemptOutcome(False, True, f"infrastructure: {exc}", steps=steps)
+            return fail(f"infrastructure: {exc}", retryable=True)
         except Exception as exc:  # agent/provider errors must still surface on the task
             log.exception("execution attempt crashed", extra={"task_id": task_id})
-            return AttemptOutcome(False, False, f"error: {type(exc).__name__}: {exc}", steps=steps)
+            return fail(f"error: {type(exc).__name__}: {exc}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     def _diff_gates(
-        self, task_id: str, changed: list[str], settings: ProjectSettings, workdir: Path
+        self,
+        task_id: str,
+        changed: list[str],
+        settings: ProjectSettings,
+        workdir: Path,
+        git_dir: Path,
     ) -> str | None:
         hits = protected_hits(changed, settings.protected_paths)
         level = classify(changed, settings.protected_paths)
@@ -389,7 +464,7 @@ class ExecutionService:
                         f"{sorted({p for p, _ in hits})[:5]}"
                     )
         introduced = []
-        for path, line_no, text in staged_added_lines(workdir):
+        for path, line_no, text in staged_added_lines(workdir, git_dir=git_dir):
             for det in SECRET_DETECTORS:
                 if det.pattern.search(text):
                     introduced.append(f"{path}:{line_no}")

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opsmith import audit_log, queue
-from opsmith.config import resolve_credential
+from opsmith.config import CredentialRefError, resolve_tenant_credential
 from opsmith.connectors import build_connector
 from opsmith.connectors.base import BaseConnector
 from opsmith.db import new_id, utcnow
@@ -123,11 +123,15 @@ class IngestionService:
         if conn.service_id:
             svc = session.get(Service, conn.service_id)
             default_service = svc.name if svc else default_service
+        try:
+            credential = resolve_tenant_credential(conn.credentials_ref)
+        except CredentialRefError as exc:
+            raise queue.PermanentFailure(f"connector {conn.name}: {exc}") from exc
         impl = self.connector_factory(
             conn.type,
             conn.config,
             default_service=default_service,
-            credential=resolve_credential(conn.credentials_ref),
+            credential=credential,
         )
         with METRICS.timer("opsmith_stage_seconds", stage="ingest"):
             result = impl.fetch(start, end, dict(conn.cursor))

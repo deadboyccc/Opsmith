@@ -8,7 +8,9 @@ changed per tenant without restarting processes.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,12 +29,17 @@ class Settings(BaseModel):
     database_url: str = ""
     # LLM providers that may receive data at all (data-residency / provider allowlist).
     llm_provider_allowlist: list[str] = Field(default_factory=lambda: ["heuristic", "anthropic"])
-    default_llm_provider: str = "heuristic"
     anthropic_api_key_ref: str = "env:ANTHROPIC_API_KEY"
-    # Executor sandbox backend: "local" (subprocess, env-scrubbed) or "docker" (network=none).
-    sandbox_backend: str = "local"
+    # Executor sandbox backend. "docker" isolates (no network, read-only root, dropped
+    # capabilities). "local" is an unconfined subprocess for development and the demo only;
+    # the executor refuses to use it for repositories outside the local SCM provider.
+    sandbox_backend: Literal["docker", "local"] = "docker"
     sandbox_image: str = "python:3.12-slim"
-    worker_lease_seconds: int = 900
+    # Where execution checkouts are created (default: the system temp dir). When the worker
+    # itself runs in a container and talks to the host's Docker daemon, this must be a path
+    # that is mounted at the same location on the host.
+    work_dir: Path | None = None
+    worker_lease_seconds: int = Field(default=900, ge=30)
     log_level: str = "INFO"
     log_json: bool = True
     bot_name: str = "Opsmith Bot"
@@ -54,10 +61,10 @@ class Settings(BaseModel):
             data_dir=Path(_env("DATA_DIR", "./data")),
             database_url=_env("DATABASE_URL", ""),
             llm_provider_allowlist=_env_list("LLM_PROVIDER_ALLOWLIST", "heuristic,anthropic"),
-            default_llm_provider=_env("LLM_PROVIDER", "heuristic"),
             anthropic_api_key_ref=_env("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY"),
-            sandbox_backend=_env("SANDBOX_BACKEND", "local"),
+            sandbox_backend=_env("SANDBOX_BACKEND", "docker"),
             sandbox_image=_env("SANDBOX_IMAGE", "python:3.12-slim"),
+            work_dir=Path(_env("WORK_DIR", "")) if _env("WORK_DIR", "") else None,
             worker_lease_seconds=int(_env("WORKER_LEASE_SECONDS", "900")),
             log_level=_env("LOG_LEVEL", "INFO"),
             log_json=_env("LOG_JSON", "true").lower() in {"1", "true", "yes"},
@@ -71,9 +78,10 @@ class Settings(BaseModel):
 
 
 def resolve_credential(ref: str | None) -> str | None:
-    """Resolve a credentials *reference*; secrets are never stored in the database.
+    """Resolve an operator-level credentials *reference* (process configuration).
 
     Supported forms: ``env:NAME`` and ``file:/path/to/secret``. ``None``/empty -> ``None``.
+    Secrets are never stored in the database; only references are.
     """
     if not ref:
         return None
@@ -82,5 +90,56 @@ def resolve_credential(ref: str | None) -> str | None:
         return os.environ.get(value) or None
     if scheme == "file":
         path = Path(value)
-        return path.read_text(encoding="utf-8").strip() if path.exists() else None
+        return path.read_text(encoding="utf-8").strip() if path.is_file() else None
     raise ValueError(f"unsupported credentials reference scheme: {scheme!r}")
+
+
+class CredentialRefError(ValueError):
+    """A repository or connector references a credential it is not allowed to use."""
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The platform's own secrets. A repository or connector must never be able to name them,
+# because its credential is sent to a URL its (tenant) admin chose.
+_RESERVED_ENV = frozenset({"POSTGRES_PASSWORD", "PGPASSWORD", "DATABASE_URL"})
+
+
+def _reserved_env_names() -> frozenset[str]:
+    scheme, _, name = _env("ANTHROPIC_API_KEY_REF", "env:ANTHROPIC_API_KEY").partition(":")
+    return _RESERVED_ENV | ({name} if scheme == "env" else set())
+
+
+def secrets_dir() -> Path:
+    return Path(_env("SECRETS_DIR", "/run/secrets"))
+
+
+def check_credentials_ref(ref: str | None) -> None:
+    """Validate a reference configured on a repository or connector (tenant-supplied).
+
+    * ``env:NAME`` may not name the platform's own secrets (``OPSMITH_*``, the database
+      password, the LLM API key).
+    * ``file:/path`` must live inside ``OPSMITH_SECRETS_DIR`` (default ``/run/secrets``), so a
+      reference cannot be used to read arbitrary files on the worker.
+    """
+    if not ref:
+        return
+    scheme, _, value = ref.partition(":")
+    if scheme == "env":
+        if not _ENV_NAME.fullmatch(value):
+            raise CredentialRefError(f"invalid environment variable name in {ref!r}")
+        if value.upper().startswith("OPSMITH_") or value in _reserved_env_names():
+            raise CredentialRefError(f"{ref!r} names a variable reserved for the platform")
+    elif scheme == "file":
+        root = secrets_dir().resolve()
+        if not Path(value).resolve().is_relative_to(root):
+            raise CredentialRefError(f"{ref!r} is outside the secrets directory {str(root)!r}")
+    else:
+        raise CredentialRefError(
+            f"unsupported credentials reference {ref!r}; use env:NAME or file:/path"
+        )
+
+
+def resolve_tenant_credential(ref: str | None) -> str | None:
+    """Resolve a repository/connector reference, enforcing :func:`check_credentials_ref`."""
+    check_credentials_ref(ref)
+    return resolve_credential(ref)

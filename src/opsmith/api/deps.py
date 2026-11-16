@@ -10,6 +10,7 @@ from opsmith.platform import Platform
 from opsmith.security import authenticate
 
 COOKIE = "opsmith_key"
+HUMAN_ROLES = ("viewer", "reviewer", "admin")
 T = TypeVar("T")
 
 
