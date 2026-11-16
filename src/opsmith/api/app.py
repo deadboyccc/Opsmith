@@ -14,6 +14,19 @@ from opsmith.observability import METRICS
 from opsmith.platform import Platform
 
 STATIC = Path(__file__).resolve().parent.parent / "ui" / "static"
+STRICT_CSP = "default-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
+# The generated API reference (Swagger UI, ReDoc) loads its script and style sheet from a CDN
+# and starts from an inline script, all of which the strict policy blocks: the pages were
+# blank. They show the OpenAPI schema and nothing a user or a model wrote, so these two paths
+# alone get a policy that lets them load.
+API_REFERENCE_PATHS = frozenset({"/docs", "/redoc"})
+_CDN = "https://cdn.jsdelivr.net"
+API_REFERENCE_CSP = (
+    f"default-src 'self'; script-src 'self' 'unsafe-inline' {_CDN}; "
+    f"style-src 'self' 'unsafe-inline' {_CDN} https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; worker-src blob:; "
+    f"img-src 'self' data: https://fastapi.tiangolo.com {_CDN}; frame-ancestors 'none'"
+)
 
 
 def create_app(platform: Platform | None = None) -> FastAPI:
@@ -58,9 +71,9 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        reference = request.url.path in API_REFERENCE_PATHS
         response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
+            "Content-Security-Policy", API_REFERENCE_CSP if reference else STRICT_CSP
         )
         return response
 

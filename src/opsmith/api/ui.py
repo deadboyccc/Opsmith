@@ -279,7 +279,9 @@ def task_review(
     # as CRLF, so compare normalized text on both sides: an untouched form is not an edit.
     edits: dict[str, Any] = {}
     title, approach = _form_text(edit_title), _form_text(edit_approach)
-    if title and title != _form_text(task.title):
+    # A browser removes line breaks from a single-line input, so the title is compared as
+    # the one line it was shown as.
+    if title and " ".join(title.split()) != " ".join(task.title.split()):
         edits["title"] = title
     if approach and approach != _form_text(task.proposed_approach):
         edits["proposed_approach"] = approach
@@ -404,7 +406,7 @@ def save_settings(
     project = owned(session, Project, project_id, user.tenant_id)
     try:
         settings = ProjectSettings.model_validate(json.loads(settings_json))
-    except (ValueError, ValidationError) as exc:
+    except (ValueError, ValidationError, RecursionError) as exc:  # nested too deep to parse
         return RedirectResponse(
             f"/ui/config?project_id={project_id}&{_error_query(exc)}", status_code=303
         )

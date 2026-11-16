@@ -74,6 +74,12 @@ def clean_value(value: Any) -> Any:
 
 # Upper bounds for durations in settings. Without them a huge value is accepted and then
 # fails inside a job (``timedelta`` overflows; PostgreSQL's INTEGER holds at most 2**31 - 1).
+# Sizes of the columns that settings end up in (``models``). PostgreSQL enforces them, so a
+# longer value saved here would fail later, inside a request or a job.
+MAX_CRON_CHARS = 100  # schedules.cron
+MAX_AGENT_CHARS = 50  # execution_runs.agent
+MAX_PROVIDER_CHARS = 50  # usage_records.provider
+MAX_MODEL_CHARS = 100  # usage_records.model, inference_runs.model
 DAY_SECONDS = 86_400
 WEEK_SECONDS = 7 * DAY_SECONDS
 YEAR_SECONDS = 365 * DAY_SECONDS
@@ -148,8 +154,8 @@ class Budgets(BaseModel):
 class StageModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = "heuristic"
-    model: str = "heuristic-v1"
+    provider: str = Field(default="heuristic", min_length=1, max_length=MAX_PROVIDER_CHARS)
+    model: str = Field(default="heuristic-v1", min_length=1, max_length=MAX_MODEL_CHARS)
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     max_tokens: int = Field(default=16000, gt=0, le=1_000_000)
     # USD per million tokens, for cost accounting and the cost budgets. Optional: Opsmith has
@@ -223,7 +229,7 @@ class ProjectSettings(BaseModel):
 
     inference_interval_hours: float = Field(default=6.0, gt=0, le=YEAR_HOURS)
     lead_max_carry: int = Field(default=3, ge=1, le=100)
-    audit_cron: str = "0 2 * * *"
+    audit_cron: str = Field(default="0 2 * * *", max_length=MAX_CRON_CHARS)
     audit_full_every_days: int = Field(default=7, ge=1, le=TEN_YEARS_DAYS)
     ingest_interval_seconds: int = Field(default=900, ge=60, le=YEAR_SECONDS)
     pr_poll_seconds: int = Field(default=600, ge=60, le=WEEK_SECONDS)
@@ -242,7 +248,7 @@ class ProjectSettings(BaseModel):
     )
     budgets: Budgets = Field(default_factory=Budgets)
     llm: LLMSettings = Field(default_factory=LLMSettings)
-    executor_agent: str = "heuristic"
+    executor_agent: str = Field(default="heuristic", min_length=1, max_length=MAX_AGENT_CHARS)
     policy_rules: list[PolicyRule] = Field(default_factory=list)
     license_allowlist: list[str] = Field(
         default_factory=lambda: ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]

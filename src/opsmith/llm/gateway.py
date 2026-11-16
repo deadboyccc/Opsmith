@@ -32,7 +32,7 @@ from opsmith.llm.prompts import corrective_retry, get_prompt
 from opsmith.models import Project, UsageRecord
 from opsmith.observability import METRICS
 from opsmith.redaction import Redactor
-from opsmith.schemas import ProjectSettings
+from opsmith.schemas import MAX_MODEL_CHARS, ProjectSettings
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -173,7 +173,8 @@ class LLMGateway:
         model_used = cfg.model
 
         def record(response: ProviderResponse, latency_ms: int) -> tuple[str, float]:
-            model = response.model or cfg.model
+            # The id a provider reports is its own text; clipped to the columns it is stored in.
+            model = (response.model or cfg.model)[:MAX_MODEL_CHARS]
             call_cost = cost_usd(
                 model,
                 response.input_tokens,

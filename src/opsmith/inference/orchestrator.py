@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 LEAD_CONTEXT_CHARS = 600
 MAX_LEAD_REFS = 5
 SUBJECT_CHARS = 300  # models.Notification.subject
+ACTOR_ID_CHARS = 80  # models.AuditLog.actor_id
 
 
 def finding_fingerprint(*parts: str | None) -> str:
@@ -186,7 +187,7 @@ class InferenceOrchestrator:
             entity_type="inference_run",
             entity_id=run.id,
             action="inference.completed",
-            actor=audit_log.Actor("agent", f"llm:{result.model}"),
+            actor=audit_log.Actor("agent", f"llm:{result.model}"[:ACTOR_ID_CHARS]),
             details={
                 "findings": created,
                 "bundles": len(bundles),

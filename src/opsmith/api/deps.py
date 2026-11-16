@@ -24,7 +24,10 @@ def get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
-SessionDep = Annotated[Session, Depends(get_session)]
+# scope="function": the transaction is committed when the handler returns, before the
+# response is sent. With the default scope the commit runs after the client already has its
+# 2xx, so a commit that fails is reported as success.
+SessionDep = Annotated[Session, Depends(get_session, scope="function")]
 
 
 def api_key_from(request: Request) -> str | None:
@@ -64,7 +67,8 @@ def require_role(*roles: str) -> Callable[..., Any]:
 def owned[T](session: Session, model: type[T], obj_id: str, tenant_id: str) -> T:
     """Fetch by id within the caller's tenant; other tenants' rows are indistinguishable
     from missing ones (404), never 403."""
-    obj = session.get(model, obj_id)
+    # An id never holds a NUL, and PostgreSQL cannot compare text that does.
+    obj = None if "\x00" in obj_id else session.get(model, obj_id)
     if obj is None or getattr(obj, "tenant_id", None) != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{model.__name__} not found")
     return obj

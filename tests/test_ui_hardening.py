@@ -273,3 +273,34 @@ def test_demo_runs_twice_into_the_same_directory(tmp_path: Path, monkeypatch) ->
     second = run_demo(tmp_path / "demo", verbose=False)
     assert (first.final_status, second.final_status) == ("verified", "verified")
     assert second.approved_task_id != first.approved_task_id
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def test_a_title_with_a_line_break_is_not_an_edit(client, platform, seed) -> None:
+    """A browser removes line breaks from a single-line input, so the posted title of an
+    untouched form differed from the stored one: a plain Approve was recorded as an approval
+    with edits, and the title was rewritten."""
+    task_id = make_task(platform, seed, title="Fix gateway\ntimeouts")
+    login(client, seed)
+    form = review_form(platform, task_id, decision="approve")
+    form["edit_title"] = "Fix gateway timeouts"  # what the browser posts for that input
+    resp = client.post(f"/ui/tasks/{task_id}/review", data=form, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error" not in resp.headers["location"]
+    with platform.db.session() as s:
+        review = s.scalars(select(Review).where(Review.task_id == task_id)).one()
+        assert (review.decision, review.edits) == ("approve", {})
+        assert s.get(Task, task_id).title == "Fix gateway\ntimeouts"
+
+
+def test_deeply_nested_settings_are_an_error_message_not_a_500(client, platform, seed) -> None:
+    login(client, seed, role="admin")
+    resp = client.post(
+        f"/ui/projects/{seed.project.id}/settings",
+        data={"settings_json": "[" * 200_000},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

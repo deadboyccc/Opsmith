@@ -291,3 +291,70 @@ def test_a_pushed_severity_that_only_looks_numeric_is_accepted(client, seed, lev
     }
     resp = client.post(url, json=[record], headers=h(seed, "service"))
     assert (resp.status_code, resp.json()["records"]) == (202, 1)
+
+
+def test_a_write_is_not_acknowledged_before_it_is_committed(platform, seed, monkeypatch) -> None:
+    """The request's transaction was committed after the response had been sent, so a commit
+    that failed (a dropped connection, a constraint checked at commit) still answered 201
+    with the id of a row that was never stored."""
+    from sqlalchemy.orm import Session  # noqa: PLC0415
+
+    client = TestClient(create_app(platform), raise_server_exceptions=False)
+    real_commit = Session.commit
+    armed = {"on": True}
+
+    def failing_commit(self: Session) -> None:
+        if armed["on"]:
+            raise RuntimeError("connection lost at commit")
+        real_commit(self)
+
+    monkeypatch.setattr(Session, "commit", failing_commit)
+    resp = client.post("/api/v1/projects", json={"name": "lost"}, headers=h(seed))
+    armed["on"] = False
+    assert resp.status_code == 500
+    names = [p["name"] for p in client.get("/api/v1/projects", headers=h(seed)).json()]
+    assert "lost" not in names
+
+
+def test_values_longer_than_their_columns_are_refused_when_saved(client, seed) -> None:
+    """PostgreSQL enforces column sizes; SQLite does not. These were accepted and then failed
+    inside a later request or job."""
+    long_cron = ",".join(str(m) for m in range(60)) + " * * * *"  # valid, and 177 characters
+    assert len(long_cron) > 100
+    settings_url = f"/api/v1/projects/{seed.project.id}/settings"
+    for settings in (
+        {"audit_cron": long_cron},
+        {"executor_agent": "a" * 51},
+        {"llm": {"default": {"provider": "openai", "model": "m" * 101}}},
+        {"llm": {"default": {"provider": "p" * 51, "model": "m"}}},
+    ):
+        resp = client.patch(settings_url, json={"settings": settings}, headers=h(seed))
+        assert resp.status_code == 422, settings
+    schedules = client.get(f"/api/v1/projects/{seed.project.id}/schedules", headers=h(seed))
+    schedule_id = schedules.json()[0]["id"]
+    resp = client.patch(
+        f"/api/v1/schedules/{schedule_id}", json={"cron": long_cron}, headers=h(seed)
+    )
+    assert resp.status_code == 422
+
+
+def test_an_id_with_a_nul_is_not_found(client, seed) -> None:
+    """PostgreSQL cannot compare text with a NUL in it; the lookup was a 500 there."""
+    assert client.get("/api/v1/tasks/task%00x", headers=h(seed)).status_code == 404
+    assert client.get("/api/v1/projects/a%00b", headers=h(seed)).status_code == 404
+
+
+def test_the_api_reference_page_is_allowed_to_load_its_assets(client) -> None:
+    """``/docs`` was served with the UI's strict policy, which blocks the script and style
+    sheet Swagger UI loads from its CDN: the page documented in the API guide was blank."""
+    docs = client.get("/docs")
+    assert docs.status_code == 200
+    script_host = "https://cdn.jsdelivr.net"
+    assert script_host in docs.text
+    assert script_host in docs.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in docs.headers["content-security-policy"]
+    # Everything else keeps the strict policy.
+    for path in ("/ui/login", "/healthz", "/api/v1/me"):
+        policy = client.get(path).headers["content-security-policy"]
+        assert "cdn.jsdelivr.net" not in policy
+        assert "unsafe-inline" not in policy
