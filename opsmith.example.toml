@@ -9,7 +9,7 @@ inference_interval_hours = 6        # "X" - per-service override via services.in
 lead_max_carry = 3
 audit_cron = "0 2 * * *"            # nightly; a full audit at least every audit_full_every_days
 audit_full_every_days = 7
-executor_agent = "heuristic"        # "claude" to let Claude implement approved tasks
+executor_agent = "heuristic"        # or "claude" / "openai" (any OpenAI-compatible endpoint); see docs/CONFIGURATION.md
 protected_paths = [
   { pattern = ".github/**", mode = "elevated" },
   { pattern = "**/auth/**", mode = "elevated" },
@@ -41,7 +41,7 @@ url = "https://github.com/acme/payments-api.git"
 full_name = "acme/payments-api"
 default_branch = "main"
 credentials_ref = "env:GITHUB_TOKEN"   # fine-grained: contents rw (branches), pull requests rw, checks r
-test_command = "pip install -q -e '.[test]' && pytest -q"
+test_command = "pytest -q"             # runs in the sandbox, which has no network: the sandbox image must already contain the dependencies
 lint_command = "ruff check ."
 audit_types = ["security", "bugs", "dependency", "compliance", "performance"]
 

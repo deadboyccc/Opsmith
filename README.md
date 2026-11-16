@@ -3,447 +3,218 @@
 [![CI](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/deadboyccc/Opsmith/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Opsmith turns production signals and source code into reviewed, ready-to-merge pull requests.**
+**Opsmith turns production signals and source code into reviewed pull requests.**
 
-It watches your logs, metrics and repositories. It finds problems and improvement opportunities
-and turns them into ranked engineering tasks. Once a human approves a task, a sandboxed coding
-agent implements it and opens a PR.
+It watches your logs, metrics and repositories, links what production shows to what the code
+shows, and ranks the result as engineering tasks. When a human approves a task, a sandboxed
+coding agent implements it and opens a pull request. After a human merges it, Opsmith checks
+that the original problem is actually gone.
 
-> **Two rules are never broken:** nothing changes code without a recorded human approval, and
-> Opsmith can never merge. A human always merges.
+It is self-hosted and not tied to a model vendor: it runs offline with built-in rules, with
+Claude, or with any OpenAI-compatible endpoint, including local models served by Ollama or
+vLLM.
 
----
+> **Two rules are never broken.** Nothing changes code without a recorded human approval, and
+> Opsmith cannot merge. A human always merges.
+
+**Status: pre-1.0.** The whole loop runs and is covered by tests, including adversarial ones
+and real-container sandbox tests. It has not been proven in production. See
+[what has been tested](#what-has-been-tested) before you point it at something valuable.
 
 ## Contents
 
-1. [The big picture](#1-the-big-picture)
-2. [Key concepts](#2-key-concepts)
-3. [How it works, stage by stage](#3-how-it-works-stage-by-stage)
-4. [Lifecycles](#4-lifecycles)
-5. [Architecture](#5-architecture)
-6. [Quickstart](#6-quickstart)
-7. [Configuration](#7-configuration)
-8. [Safety model](#8-safety-model)
-9. [API and roles](#9-api-and-roles)
-10. [Development](#10-development)
-11. [Further reading](#11-further-reading)
+- [See it work in a minute](#see-it-work-in-a-minute)
+- [How it works](#how-it-works)
+- [Quickstart](#quickstart)
+- [Safety at a glance](#safety-at-a-glance)
+- [What has been tested](#what-has-been-tested)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
 
----
+## See it work in a minute
 
-## 1. The big picture
-
-The whole system is one loop: **observe → analyze → propose → human approve → execute → PR**.
-It has three phases:
-
-- **Find problems:** automatic and read-only.
-- **Decide:** a human is always in the loop.
-- **Fix:** happens only after approval.
-
-```mermaid
-flowchart TB
-    subgraph FIND["Find problems"]
-        direction LR
-        SIG["Logs + metrics"] --> ETL["1 · Ingest + ETL<br/>normalize, redact, bundle"]
-        ETL --> INF["2 · Batch inference<br/>every X hours,<br/>carries open leads forward"]
-        REPOS["Repositories"] --> AUD["3 · Repo audits<br/>scanners + LLM triage"]
-    end
-
-    subgraph DECIDE["Decide"]
-        direction LR
-        AGG["4 · Aggregate<br/>correlate, dedup, rank"] --> REVIEW{{"5 · Human review"}}
-    end
-
-    subgraph FIX["Fix"]
-        direction LR
-        EXEC["6 · Sandboxed agent<br/>edit, test, check"] --> PR["7 · Pull request + CI"]
-        PR -- "a human merges" --> VERIFY["8 · Post-merge<br/>verification"]
-    end
-
-    INF --> AGG
-    AUD --> AGG
-    REVIEW -- "approve" --> EXEC
-    REVIEW -. "request investigation" .-> INF
-```
-
-Rejections feed back too: a rejected task suppresses future duplicates of the same issue
-unless the evidence materially changes.
-
-Every arrow is a **queued, idempotent, retried job**. A failure never vanishes: it ends up as a
-visible dead job with a notification, or as a task back in the review queue with an
-execution report.
-
----
-
-## 2. Key concepts
-
-Learn these seven terms and the rest of this document follows.
-
-| Concept | What it is | Example |
-|---|---|---|
-| **Signal** | A normalized, redacted log event or metric point | `ERROR upstream timeout after 30000ms` |
-| **Bundle** | A compact, LLM-sized summary of one service over one time window: log templates and metric anomalies, with pointers to the raw data | 80 timeout errors, p95 latency up 590% |
-| **Lead** | An open question carried from one analysis run to the next until it is confirmed, refuted or expired | "Timeouts are recurring. Confirm next window." |
-| **Finding** | A confirmed problem with evidence, from inference (runtime) or an audit (static) | `httpx.post` without timeout at `app/payments.py:10` |
-| **Task** | One or more correlated findings, ranked P0–P3, with an approach and acceptance criteria | "Add a timeout to the payment gateway call" |
-| **Review** | A human decision on a task, recorded with identity and time | approved by *Riley Reviewer* |
-| **Execution run** | One sandboxed attempt to implement an approved task and open a PR | branch `opsmith/performance/…`, PR #1 |
-
-The link from code back to evidence is always traceable:
-**PR → execution run → review → task → findings → evidence (bundles, raw events, audit results) → pipeline runs → leads.**
-
----
-
-## 3. How it works, stage by stage
-
-| # | Stage | What happens | Produces |
-|---|---|---|---|
-| 1 | **Ingest + ETL** | Connectors pull or receive signals. They are parsed, normalized, enriched with service and repo ownership, and **redacted** (PII and secrets). Similar log lines are grouped into templates; metrics get baselines, deltas and anomaly flags. | Raw JSONL in object storage, plus **bundles** |
-| 2 | **Batch inference** | Every *X* hours per service, the model reads the new bundles **plus the open leads from the last run**. It confirms, refutes or carries each lead and reports new findings and leads. | **Findings**, updated **leads**, an immutable run record |
-| 3 | **Repo audits** | On a schedule (full or changed files only): secrets, Python bug, security and N+1 checks, dependency CVEs (OSV), licenses, policy-as-code, test gaps, and external scanners when installed. An LLM pass filters false positives. | **Findings** with code locations |
-| 4 | **Aggregate** | Findings from both sources are merged when they point at the same code (higher confidence), deduplicated against open, recently closed and rejected tasks, then scored and ranked. | Ranked **tasks** in the review queue |
-| 5 | **Human review** | A reviewer approves, approves with edits, rejects (with a reason), defers, or asks for more investigation. | A recorded **review** |
-| 6 | **Execute** | An isolated agent checks out the repo, edits files, and runs build, lint and test. Opsmith re-runs the checks itself and blocks unsafe diffs. | A tested commit on a new branch |
-| 7 | **Pull request** | Opsmith pushes the branch and opens a PR that carries the evidence, the checks run, the risk, and links back to the task. | A **PR**; CI status is tracked |
-| 8 | **Verify** | After a human merges, Opsmith watches the original signal: still gone means `verified`, back again means `regressed`. | The final task status |
-
-### How runtime and code evidence meet
-
-The strongest tasks combine *what production shows* with *what the code shows*:
-
-```mermaid
-flowchart LR
-    LOG["Runtime finding<br/>80 timeout errors<br/>stack trace: app/payments.py:10"] --> MATCH{"Same file, and<br/>same category nearby<br/>or the same line?"}
-    CODE["Static finding<br/>HTTP call without timeout<br/>app/payments.py:10"] --> MATCH
-    MATCH -- "yes" --> TASK["One task<br/>confidence 1 − (1−a)(1−b)<br/>ranked higher"]
-    MATCH -- "no" --> SEP["Separate tasks"]
-```
-
-### How duplicates and rejections are handled
-
-| A new finding matches… | Result |
-|---|---|
-| an **open** task | Its evidence is added to that task; no new task is created |
-| a task **closed or merged in the last 14 days** | Suppressed |
-| a **rejected** task | Suppressed unless the evidence *materially* changed: higher severity, a new kind of evidence, or 2–3× stronger evidence, depending on the rejection reason |
-| nothing | A new task is created and sent for review |
-
----
-
-## 4. Lifecycles
-
-### Lead lifecycle
-
-Leads keep context between analysis runs. Each run sees only a *summary* of open leads, never
-the full history, so the context stays bounded.
-
-```mermaid
-stateDiagram-v2
-    [*] --> open: model spots a pattern, or a reviewer asks
-    open --> carried: still uncertain
-    carried --> carried: still uncertain, age + 1
-    open --> confirmed: evidence establishes it
-    carried --> confirmed: evidence establishes it
-    open --> refuted: evidence contradicts it
-    carried --> refuted: evidence contradicts it
-    carried --> expired: carried too many times
-    confirmed --> [*]: becomes a finding
-    refuted --> [*]
-    expired --> [*]: escalated to a human
-```
-
-### Task lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> proposed
-    proposed --> in_review: submitted to the queue
-    in_review --> approved: approve or approve with edits
-    in_review --> rejected: reject with a reason
-    in_review --> deferred: defer
-    in_review --> investigating: request investigation
-    deferred --> in_review: resubmitted
-    investigating --> in_review: investigation lead resolved
-    rejected --> in_review: evidence materially changed
-    approved --> executing
-    executing --> pr_open: checks pass, PR opened
-    executing --> failed: agent or checks fail
-    failed --> in_review: back with an execution report
-    pr_open --> merged: a human merges
-    pr_open --> closed: PR closed
-    merged --> verified: signal stays gone
-    merged --> regressed: signal returns
-    regressed --> in_review
-    verified --> [*]
-    closed --> [*]
-```
-
-### From approval to pull request
-
-```mermaid
-sequenceDiagram
-    actor Reviewer
-    participant UI as Opsmith API / UI
-    participant Queue as Job queue
-    participant Exec as Executor
-    participant Agent as Sandboxed agent
-    participant Git as GitHub
-
-    Reviewer->>UI: Approve task
-    UI->>Queue: Record review, enqueue "execute"
-    Queue->>Exec: Run job
-    Exec->>Exec: Gate: human approval? protected paths? file conflicts?
-    Exec->>Agent: Fresh checkout (no remote, no credentials)
-    Agent->>Agent: Plan, edit files, run build / lint / test
-    Agent-->>Exec: Done, with summary
-    Exec->>Exec: Re-run checks, block protected paths and new secrets
-    Exec->>Exec: Re-check the approval
-    Exec->>Git: Push branch, open PR with evidence and provenance
-    Git-->>Exec: CI status (polled)
-    Reviewer->>Git: Review and merge (humans only)
-    Exec->>Exec: Post-merge verification: verified or regressed
-```
-
----
-
-## 5. Architecture
-
-Three process types share one database. Scale workers horizontally; the scheduler is safe to
-run more than once because each schedule slot is enqueued exactly once.
-
-```mermaid
-flowchart TB
-    USERS["Reviewers and admins<br/>browser or API"] --> API
-    PUSH["Collectors<br/>push API"] --> API
-
-    subgraph OPS["Opsmith processes"]
-        API["api<br/>FastAPI + review UI"]
-        SCHED["scheduler<br/>cron and interval schedules"]
-        WORKER["worker (1..n)<br/>runs pipeline jobs"]
-    end
-
-    DB[("PostgreSQL<br/>entities, job queue, audit log")]
-    OBJ[("Object store<br/>raw signals")]
-
-    API <--> DB
-    SCHED -- "enqueue due jobs" --> DB
-    WORKER <--> DB
-    WORKER --> OBJ
-    WORKER --> SRC["Loki · Prometheus · files"]
-    WORKER --> LLM["LLM gateway<br/>Claude or offline heuristic"]
-    WORKER --> SANDBOX["Sandbox<br/>local or Docker, no network"]
-    WORKER --> GH["GitHub<br/>branch push and PR only"]
-```
-
-**Technology:** Python 3.12, FastAPI, SQLAlchemy 2, Pydantic 2, PostgreSQL (SQLite for
-development), the official Anthropic SDK, and uv. The reasons behind each choice are in
-[`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md).
-
-### Code map
-
-| Path | Responsibility |
-|---|---|
-| `src/opsmith/platform.py` | Wires every component together. Start reading here. |
-| `connectors/`, `etl/` | Signal sources; normalize, redact, store, bundle |
-| `inference/` | Chained analysis runs with lead carry-over |
-| `audits/` | Analyzers and the audit runner |
-| `aggregation/` | Correlation, dedup, scoring, task drafting |
-| `review.py` | The human review gate |
-| `executor/` | Sandbox, coding agents, diff gates, PR body |
-| `scm/` | GitHub and local git providers (no merge operation) |
-| `tracking.py` | PR/CI tracking and post-merge verification |
-| `llm/` | The gateway every model call goes through, prompts, pricing |
-| `queue.py`, `scheduler.py` | Durable job queue and schedules |
-| `api/`, `ui/` | REST API and server-rendered UI |
-
----
-
-## 6. Quickstart
-
-### Option A: Offline demo (about 5 seconds, no API key)
-
-The fastest way to see the entire loop.
+You need [uv](https://docs.astral.sh/uv/) and git. No API key, no Docker, no network.
 
 ```bash
+git clone https://github.com/deadboyccc/Opsmith.git && cd Opsmith
 uv sync --all-extras
 uv run opsmith demo --dir ./opsmith-demo
 ```
 
-What you will see:
+The demo builds a small repository with a real bug, feeds in logs and metrics, and runs the
+entire loop with the offline rule-based provider:
 
-1. **Run 1:** an error burst becomes open **leads**.
-2. **Run 2:** the timeout lead is **confirmed** using context carried from run 1, and a latency
-   regression is found.
-3. **Audit:** finds a missing HTTP timeout on the same line as the runtime errors, and the two
-   **merge into one task**.
-4. A reviewer **approves** it, the agent fixes it, and the checks pass.
-5. A **PR** opens with local CI, a human merges it, and the task ends **`verified`**.
+1. **First analysis run:** a burst of timeout errors becomes open **leads** (things worth
+   watching).
+2. **Second run:** the timeout lead is **confirmed**, using context carried over from the first
+   run, and a latency regression is found.
+3. **Repository audit:** finds an HTTP call without a timeout on the same line the errors point
+   at. The runtime finding and the code finding **merge into one task**.
+4. A reviewer **approves** the task. The agent fixes the code and the checks pass.
+5. A **pull request** opens, a human merges it, and the task ends **`verified`**.
 
-Then explore the result in the UI:
+It prints an admin API key. Use it to look around in the UI:
 
 ```bash
 OPSMITH_DATA_DIR=./opsmith-demo/data uv run opsmith api
 # open http://127.0.0.1:8000/ui and sign in with the admin key the demo printed
 ```
 
-### Option B: Full stack with Docker Compose (PostgreSQL)
+## How it works
 
-```bash
-docker compose up -d --build                                              # api, worker, scheduler, postgres
-docker compose exec api opsmith init --tenant acme --admin "Your Name"    # prints an API key (shown once)
-docker compose cp opsmith.example.toml api:/tmp/opsmith.toml
-docker compose exec api opsmith apply /tmp/opsmith.toml --tenant acme     # projects, repos, connectors
+One loop: **observe → analyze → propose → human approves → execute → pull request → verify.**
+
+```mermaid
+flowchart TB
+    subgraph FIND["Find problems (automatic, read-only)"]
+        direction LR
+        SIG["Logs + metrics"] --> ETL["1 · Ingest<br/>normalize, redact, bundle"]
+        ETL --> INF["2 · Analyze<br/>every few hours,<br/>carries open leads forward"]
+        REPOS["Repositories"] --> AUD["3 · Audit<br/>scanners + triage"]
+    end
+
+    subgraph DECIDE["Decide (always a human)"]
+        direction LR
+        AGG["4 · Aggregate<br/>correlate, dedup, rank"] --> REVIEW{{"5 · Human review"}}
+    end
+
+    subgraph FIX["Fix (only after approval)"]
+        direction LR
+        EXEC["6 · Sandboxed agent<br/>edit, test, gate"] --> PR["7 · Pull request + CI"]
+        PR -- "a human merges" --> VERIFY["8 · Verify<br/>is the signal gone?"]
+    end
+
+    INF --> AGG
+    AUD --> AGG
+    REVIEW -- "approve" --> EXEC
+    REVIEW -. "ask for more investigation" .-> INF
 ```
 
-Open <http://localhost:8000/ui> and sign in with the key.
+| # | Stage | What happens | Produces |
+|---|---|---|---|
+| 1 | **Ingest** | Connectors pull or receive signals. They are normalized, **redacted**, grouped into log templates and metric baselines | Compact **bundles** per service and time window |
+| 2 | **Analyze** | Per service, a model of your choice reads the new bundles **plus the open leads from the last run**, and confirms, refutes or carries each lead | **Findings** and updated **leads** |
+| 3 | **Audit** | On a schedule: secrets, Python bug and security checks, dependency and license checks, your own policy rules, and external scanners when installed | **Findings** with code locations |
+| 4 | **Aggregate** | Findings that point at the same code are merged, checked against open, recently closed and rejected tasks, then scored | Ranked **tasks** |
+| 5 | **Review** | A person approves, approves with edits, rejects with a reason, defers, or asks for more investigation | A recorded **review** |
+| 6 | **Execute** | An isolated agent edits the checkout and runs the repository's build, lint and test. Opsmith re-runs the checks and blocks unsafe diffs | A tested commit on a new branch |
+| 7 | **Pull request** | Opsmith pushes the branch and opens a PR that carries the evidence, the checks and links back to the task | A **PR**; CI is tracked |
+| 8 | **Verify** | After the merge, Opsmith watches the original signal | `verified` or `regressed` |
 
-### Option C: Local development
+Every arrow is a queued, retried job. A failure never vanishes: it ends as a visible dead job
+with a notification, or as a task back in the review queue with a report.
+
+**What makes a task strong** is evidence from both sides. Eighty timeout errors whose stack
+traces point at `app/payments.py:10`, plus an audit finding for an HTTP call without a timeout
+on that line, become one task with higher confidence than either alone. Every pull request can
+be traced back: **PR → execution → review → task → findings → evidence → analysis runs → leads.**
+
+The seven terms above (signal, bundle, lead, finding, task, review, execution), the lifecycles
+and the architecture are explained in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Quickstart
+
+### Try it on your machine (development)
 
 ```bash
 uv sync --all-extras
-uv run opsmith init --tenant dev     # prints an API key
-uv run opsmith run                   # api + scheduler + worker in one process (development only)
+export OPSMITH_SANDBOX_BACKEND=local      # development only: no isolation, local repositories only
+export OPSMITH_LOCAL_ROOT=$HOME/opsmith   # the one directory Opsmith may read repos and log files from
+uv run opsmith init --tenant dev          # prints an admin API key, shown once
+uv run opsmith run                        # API + scheduler + worker in one process
 ```
 
----
-
-## 7. Configuration
-
-Configuration has two layers:
-
-| Layer | Where | Examples |
-|---|---|---|
-| **Process settings** | `OPSMITH_*` environment variables ([`.env.example`](.env.example)) | database URL, data directory, sandbox backend, provider allowlist |
-| **Project settings** | Per project, editable in the UI, the API, or a TOML file | analysis interval, budgets, protected paths, models per stage, notifications, policy rules |
-
-Apply project configuration declaratively. Re-applying is safe, because records are upserted
-by name:
+Open <http://127.0.0.1:8000/ui>. Describe a project in a TOML file
+([`opsmith.example.toml`](opsmith.example.toml) shows every option) and apply it:
 
 ```bash
-opsmith apply opsmith.toml --tenant acme      # see opsmith.example.toml for every option
+uv run opsmith apply opsmith.toml --tenant dev
 ```
 
-A minimal `opsmith.toml`:
+### Run the full stack (Docker Compose, PostgreSQL)
 
-```toml
-[[projects]]
-name = "payments"
-
-[projects.settings]
-inference_interval_hours = 6          # "X": per-service overrides are allowed
-
-[[projects.repositories]]
-name = "payments-api"
-scm_provider = "github"
-url = "https://github.com/acme/payments-api.git"
-full_name = "acme/payments-api"
-credentials_ref = "env:GITHUB_TOKEN"  # a reference, never the secret itself
-test_command = "pytest -q"
-
-[[projects.services]]
-name = "payments-api"
-repository = "payments-api"
-
-[[projects.connectors]]
-name = "loki"
-type = "loki"
-service = "payments-api"
-config = { url = "http://loki:3100", query = '{service_name="payments-api"}' }
+```bash
+cp .env.example .env
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env    # required; there is no default
+docker compose up -d --build
+docker compose exec api opsmith init --tenant acme --admin "Your Name"
 ```
 
-> **Secrets are never stored.** Configuration holds references only: `env:NAME` or
-> `file:/path`.
+This runs the API, a worker, the scheduler and PostgreSQL. To let it **execute** approved tasks
+you also choose a sandbox, which is a deliberate step:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#execution-sandbox) explains the options and the
+trade-offs, connects a GitHub repository, and shows how to plug in the model you want to use.
 
-### Turning on Claude
+### Command line
 
-The default `heuristic` provider is deterministic and works offline. To use Claude, install the
-`anthropic` extra, set `ANTHROPIC_API_KEY`, and choose models per stage:
+| Command | Purpose |
+|---|---|
+| `opsmith demo --dir DIR` | Run the whole loop offline |
+| `opsmith init --tenant NAME --admin NAME` | Create the database, a tenant and its first admin |
+| `opsmith create-user --tenant NAME --name NAME --role ROLE` | Create a key for a person or a collector |
+| `opsmith apply FILE --tenant NAME` | Apply a project configuration file (safe to repeat) |
+| `opsmith api` / `scheduler` / `worker` | The three production processes |
+| `opsmith run` | All three in one process, for development |
 
-```toml
-[projects.settings]
-executor_agent = "claude"                 # let Claude implement approved tasks
-
-[projects.settings.llm.default]           # analysis, triage, task drafting
-provider = "anthropic"
-model = "claude-opus-5-5"
-effort = "medium"
-
-[projects.settings.llm.stages.executor]   # the coding agent
-provider = "anthropic"
-model = "claude-opus-5-5"
-effort = "high"
-```
-
----
-
-## 8. Safety model
+## Safety at a glance
 
 | Guarantee | How it is enforced |
 |---|---|
-| **No code change without a human approval** | The executor checks for a reviewer or admin approval before the run and again just before opening the PR |
-| **No autonomous merge** | The SCM interface has no merge operation at all |
-| **Redaction before any LLM call** | Signals are redacted during ingestion and redacted again in the LLM gateway |
-| **Prompt-injection hardening** | Logs and code are marked as untrusted data; model output must match a schema; unknown IDs and invented evidence are discarded |
-| **Least privilege** | Connectors are read-only; the agent has no shell, network or Git credentials; Opsmith only pushes branches (never the default branch) and opens PRs |
-| **Sandbox isolation** | `local`: scrubbed environment and timeouts. `docker`: `--network none`, all capabilities dropped |
-| **Protected paths** | `elevated` paths (CI config, auth code) need an admin approval with explicit acknowledgement; `excluded` paths are never changed |
-| **Budgets** | Token and cost caps per run and per project per day; time and iteration caps for agents |
-| **Full audit trail** | Every state change and decision is logged; analysis runs are immutable and record their prompt and model versions |
+| **No code change without human approval** | One gate checks the approval before the run and again before the push. The approval covers exactly the task the reviewer saw: if its scope changes afterwards, the approval is void |
+| **No merge** | The SCM interface has no merge operation |
+| **Redaction before any model call** | Signals are redacted when stored and again in the gateway every model call goes through |
+| **Untrusted text stays data** | Logs, code and model output are never instructions; model output is schema-checked and invented references are dropped |
+| **Isolated execution** | Repository commands run in containers with no network, a read-only root and no capabilities. The agent has no shell and no credentials. The unconfined development sandbox is refused for real repositories |
+| **Gated diffs** | Protected paths need an elevated approval or are excluded outright; credential-like values block the PR. The gates run after the last sandboxed command |
+| **Least privilege** | Connectors only read. Opsmith pushes only to `opsmith/...` branches and opens PRs |
+| **Budgets** | Token and cost caps per run and per project per day; time and iteration caps for the agent |
+| **Audit trail** | Every state change and decision is recorded; finished analysis runs are immutable |
 
----
+Each of these is mapped to its enforcement point and to the tests that try to break it in
+[docs/SECURITY.md](docs/SECURITY.md), together with the limits you should know about.
 
-## 9. API and roles
+## What has been tested
 
-Interactive OpenAPI docs are served at `/docs`. Authenticate with
-`Authorization: Bearer <api key>`.
+Honest scope, so you can judge it:
 
-| Role | Can do |
+| Area | Evidence |
 |---|---|
-| `viewer` | Read everything in their tenant |
-| `reviewer` | Review tasks (approve, edit, reject, defer, investigate) |
-| `admin` | Configure projects, retry dead jobs, approve protected-path changes |
-| `service` | Push signals (`POST /api/v1/connectors/{id}/push`) |
+| The full loop | `tests/test_e2e.py` asserts the specification's acceptance criteria end to end, on SQLite and on PostgreSQL in CI |
+| Safety gates | `tests/test_hardening.py` and friends attack each guarantee: approval binding, gate bypasses, sandbox escapes, cross-tenant access, role escalation |
+| Docker sandbox | Tested with **real containers** (network, filesystem, capabilities, timeouts, and a full execution). Skipped automatically where Docker is absent |
+| Compose deployment | Built and started end to end, including the worker starting sandbox containers through the overlay |
+| GitHub, Loki, Prometheus | Tested against **mocked HTTP** only. Not yet exercised against live services in CI |
+| Models | The offline rule-based provider drives the tests and the demo. The OpenAI-compatible provider and its coding agent are tested against a scripted endpoint, and were run **live against Ollama** with a small open model (structured output, a pipeline stage, the tool-calling loop). Claude is tested against **fake clients** only |
+| Production use | None yet. No load tests, no long-running deployment |
 
-Most-used endpoints:
+There are no published quality metrics yet (precision of findings, share of pull requests
+merged, verified-fix rate). That, a tested connector matrix and schema migrations are the main
+open work; see the [changelog](CHANGELOG.md) and
+[the review response](docs/REVIEW_RESPONSE.md).
 
-| Purpose | Endpoint |
+## Documentation
+
+| Read this | For |
 |---|---|
-| Configure | `POST /api/v1/projects` · `…/repositories` · `…/services` · `…/connectors` · `PATCH …/settings` |
-| Review queue | `GET /api/v1/projects/{id}/tasks?status=in_review` |
-| Decide | `POST /api/v1/tasks/{id}/review` |
-| Trace a PR | `GET /api/v1/tasks/{id}/provenance` |
-| Pipeline state | `…/leads` · `…/findings` · `…/inference-runs` · `…/audit-runs` · `…/executions` · `…/summary` |
-| Operations | `POST …/trigger` · `GET /api/v1/jobs` · `POST /api/v1/jobs/{id}/retry` · `GET /healthz` · `GET /metrics` |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it works: concepts, lifecycles, processes, where the code lives |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every project setting, connector, repository and model option |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Installing, the sandbox, GitHub, choosing a model, environment variables, operations |
+| [docs/API.md](docs/API.md) | Roles, authentication and the REST API |
+| [docs/SECURITY.md](docs/SECURITY.md) | Guarantees, how each is enforced and tested, and what is not protected |
+| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | Why each design choice was made, and the known limitations |
+| [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) | Developing Opsmith: setup, invariants, conventions |
+| [CHANGELOG.md](CHANGELOG.md) | What changed |
+| [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | The original product specification |
+| [docs/independent-project-review.md](docs/independent-project-review.md), [docs/REVIEW_RESPONSE.md](docs/REVIEW_RESPONSE.md) | An independent review of the project, and what was done about it |
 
-All data is tenant-scoped. Other tenants' resources respond with `404`.
-
----
-
-## 10. Development
+## Contributing
 
 ```bash
-uv sync --all-extras     # install everything
-make check               # what CI runs: ruff, format check, mypy, tests with coverage
-uv run pytest -q         # tests only (add -k <expr> to target)
-uv run pytest tests/test_e2e.py   # the spec's acceptance criteria, end to end
-make docker-test         # run the checks inside Docker (no local Python needed)
+uv sync --all-extras
+make check        # what CI runs: ruff, format check, mypy, tests with coverage
 ```
 
-CI runs the same checks, repeats the acceptance tests on PostgreSQL, and builds the container
-images.
-
-Contributing, or an AI coding agent? Read [`AGENTS.md`](AGENTS.md) first. It lists the
-invariants that must never be broken and the conventions the codebase follows.
-
----
-
-## 11. Further reading
-
-| Document | Read it for |
-|---|---|
-| [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) | The original product specification |
-| [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md) | Why each design choice was made, the alternatives, and known limitations |
-| [`AGENTS.md`](AGENTS.md) | Contributor and AI-agent guide: commands, invariants, conventions |
-| [`opsmith.example.toml`](opsmith.example.toml) | Every project configuration option, annotated |
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). It is short.
 
 ## License
 
