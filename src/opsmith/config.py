@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _env(name: str, default: str) -> str:
@@ -52,8 +52,16 @@ class Settings(BaseModel):
     # both, so project configuration can never point the worker at arbitrary host files.
     local_root: Path | None = None
     worker_lease_seconds: int = Field(default=900, ge=30)
-    log_level: str = "INFO"
+    log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
     log_json: bool = True
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _level_name(cls, value: object) -> object:
+        """``debug`` and ``DEBUG`` are the same level; anything else is refused when the
+        process starts instead of raising from ``logging`` later."""
+        return value.upper() if isinstance(value, str) else value
+
     bot_name: str = "Opsmith Bot"
     bot_email: str = "opsmith-bot@users.noreply.github.com"
     # Public URL of the UI (e.g. https://opsmith.example.com). When set, pull requests link

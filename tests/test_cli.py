@@ -131,3 +131,67 @@ def test_init_does_not_print_the_database_password(env: Path, monkeypatch, capsy
     assert "db.internal" in settings.database_display
     assert main(["init", "--tenant", "acme"]) == 0  # SQLite here: the path is shown as is
     assert "database: sqlite:///" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- regressions (1.2.1)
+
+
+def test_apply_reports_values_of_the_wrong_type(env: Path, tmp_path: Path, capsys) -> None:
+    """``apply`` checked far less than the API does. A value of the wrong type either ended in
+    a traceback (``TypeError``, a database error) or was stored: ``path_prefixes = "app/"``
+    became a string that later code read one character at a time."""
+    main(["init", "--tenant", "acme"])
+    repo = '[[projects.repositories]]\nname = "r"\nurl = "/srv/r"\n'
+    bad_configs = {
+        "audit_types": repo + "audit_types = 5\n",
+        "list of strings": repo + 'audit_types = [["security"]]\n',
+        "test_command": repo + 'test_command = ["pytest"]\n',
+        "default_branch": repo + "default_branch = 7\n",
+        "url": '[[projects.repositories]]\nname = "r"\nurl = 5\n',
+        "path_prefixes": '[[projects.services]]\nname = "s"\npath_prefixes = "app/"\n',
+        "environment": '[[projects.services]]\nname = "s"\nenvironment = 3\n',
+        "enabled": '[[projects.connectors]]\nname = "c"\ntype = "loki"\nenabled = "no"\n',
+        "unknown type": '[[projects.connectors]]\nname = "c"\ntype = ["loki"]\n',
+    }
+    cfg = tmp_path / "bad.toml"
+    for expected, body in bad_configs.items():
+        cfg.write_text(f'[[projects]]\nname = "p"\n{body}')
+        assert main(["apply", str(cfg), "--tenant", "acme"]) == 1, expected
+        assert expected in capsys.readouterr().err, expected
+    platform = Platform(Settings(data_dir=env, log_json=False))
+    with platform.db.session() as s:
+        assert s.scalars(select(Project)).all() == []
+
+
+def test_apply_links_a_connector_to_the_service_in_the_named_environment(
+    env: Path, tmp_path: Path
+) -> None:
+    """Services were looked up by name alone, so with ``api`` in two environments every
+    connector was linked to whichever came last in the file."""
+    main(["init", "--tenant", "acme"])
+    cfg = tmp_path / "two.toml"
+    cfg.write_text(
+        '[[projects]]\nname = "p"\n'
+        '[[projects.services]]\nname = "api"\n'
+        '[[projects.services]]\nname = "api"\nenvironment = "staging"\n'
+        '[[projects.connectors]]\nname = "prod-logs"\ntype = "push_logs"\nservice = "api"\n'
+        '[[projects.connectors]]\nname = "stg-logs"\ntype = "push_logs"\nservice = "api"\n'
+        'service_environment = "staging"\n'
+    )
+    assert main(["apply", str(cfg), "--tenant", "acme"]) == 0
+    platform = Platform(Settings(data_dir=env, log_json=False))
+    with platform.db.session() as s:
+        linked = {
+            conn.name: s.get(Service, conn.service_id).environment
+            for conn in s.scalars(select(Connector))
+        }
+    assert linked == {"prod-logs": "production", "stg-logs": "staging"}
+
+
+def test_an_unknown_log_level_is_a_configuration_error(env: Path, monkeypatch) -> None:
+    """It reached ``logging`` as it was and every command ended in a traceback."""
+    monkeypatch.setenv("OPSMITH_LOG_LEVEL", "verbose")
+    with pytest.raises(SystemExit, match="OPSMITH_"):
+        main(["scheduler", "--once"])
+    monkeypatch.setenv("OPSMITH_LOG_LEVEL", "debug")
+    assert main(["scheduler", "--once"]) == 0

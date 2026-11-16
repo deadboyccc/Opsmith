@@ -30,6 +30,32 @@ _REPO_FIELDS = {
 }
 _SERVICE_FIELDS = {"environment", "owner", "path_prefixes", "inference_interval_hours"}
 _CONNECTOR_FIELDS = {"type", "config", "credentials_ref", "interval_seconds", "enabled"}
+# The type and longest length (the column's) of the plain fields: ``apply`` writes them as
+# they are, so each is checked here. A missing or ``None`` value is always allowed.
+_TEXT = {
+    "repository": {
+        "url": 500,
+        "full_name": 200,
+        "default_branch": 100,
+        "test_command": 500,
+        "lint_command": 500,
+        "build_command": 500,
+    },
+    "service": {"environment": 50, "owner": 200},
+    "connector": {},
+}
+
+
+def _check_text(data: dict[str, Any], kind: str, what: str) -> None:
+    for key, limit in _TEXT[kind].items():
+        value = data.get(key)
+        if value is not None and not (isinstance(value, str) and 0 < len(value) <= limit):
+            raise ConfigError(f"{what}: {key} must be a string of at most {limit} characters")
+
+
+def _check_strings(value: Any, key: str, what: str) -> None:
+    if not (isinstance(value, list) and all(isinstance(item, str) for item in value)):
+        raise ConfigError(f"{what}: {key} must be a list of strings")
 
 
 class ConfigError(ValueError):
@@ -42,7 +68,7 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def _pick(data: dict[str, Any], allowed: set[str], what: str) -> dict[str, Any]:
-    extra = set(data) - allowed - {"name", "repository", "service"}
+    extra = set(data) - allowed - {"name", "repository", "service", "service_environment"}
     if extra:
         raise ConfigError(f"{what}: unknown keys {sorted(extra)}")
     return {k: v for k, v in data.items() if k in allowed}
@@ -65,8 +91,11 @@ def _check_ref(ref: Any, what: str) -> None:
 
 
 def _validate_repository(data: dict[str, Any], what: str) -> None:
-    if data.get("scm_provider", "local") not in {"local", "github"}:
+    if data.get("scm_provider", "local") not in ("local", "github"):
         raise ConfigError(f"{what}: scm_provider must be 'local' or 'github'")
+    _check_text(data, "repository", what)
+    if "audit_types" in data:
+        _check_strings(data["audit_types"], "audit_types", what)
     bad = set(data.get("audit_types", [])) - set(AUDIT_TYPES)
     if bad:
         raise ConfigError(f"{what}: unknown audit types {sorted(bad)}")
@@ -85,10 +114,15 @@ def _validate_connector(data: dict[str, Any], what: str) -> None:
         )
     if not isinstance(data.get("config", {}), dict):
         raise ConfigError(f"{what}: config must be a table")
+    if not isinstance(data.get("enabled", True), bool):
+        raise ConfigError(f"{what}: enabled must be true or false")
     _check_ref(data.get("credentials_ref"), what)
 
 
 def _validate_service(data: dict[str, Any], what: str) -> None:
+    _check_text(data, "service", what)
+    if "path_prefixes" in data:
+        _check_strings(data["path_prefixes"], "path_prefixes", what)
     hours = data.get("inference_interval_hours")
     if hours is not None and not (
         isinstance(hours, (int, float)) and not isinstance(hours, bool) and 0 < hours <= YEAR_HOURS
@@ -136,7 +170,7 @@ def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list
             session.flush()
             repos[repo.name] = repo
 
-        services: dict[str, Service] = {}
+        services: dict[tuple[str, str], Service] = {}
         for sdata in pdata.get("services", []):
             what = f"service {_name(sdata, 'service')}"
             _validate_service(sdata, what)
@@ -158,12 +192,12 @@ def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list
                     raise ConfigError(f"{what}: unknown repository {sdata['repository']!r}")
                 svc.repository_id = repos[sdata["repository"]].id
             session.flush()
-            services[svc.name] = svc
+            services[svc.name, svc.environment] = svc
 
         types = available_types()
         for cdata in pdata.get("connectors", []):
             what = f"connector {_name(cdata, 'connector')}"
-            if cdata.get("type") not in types:
+            if not isinstance(cdata.get("type"), str) or cdata["type"] not in types:
                 raise ConfigError(
                     f"{what}: unknown type {cdata.get('type')!r}; known: {sorted(types)}"
                 )
@@ -186,9 +220,14 @@ def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list
                 setattr(conn, key, value)
             conn.kind = types[conn.type]
             if "service" in cdata:
-                if cdata["service"] not in services:
-                    raise ConfigError(f"{what}: unknown service {cdata['service']!r}")
-                conn.service_id = services[cdata["service"]].id
+                # A service is its name and its environment; the same name may exist in several.
+                wanted = (cdata["service"], cdata.get("service_environment", "production"))
+                if not all(isinstance(part, str) for part in wanted) or wanted not in services:
+                    raise ConfigError(
+                        f"{what}: unknown service {wanted[0]!r} in environment {wanted[1]!r} "
+                        "(set service_environment for a service that is not in production)"
+                    )
+                conn.service_id = services[wanted].id
             session.flush()
         ensure_project_schedules(session, project)
         audit_log.record(
