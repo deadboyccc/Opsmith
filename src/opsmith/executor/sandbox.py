@@ -286,7 +286,7 @@ def make_sandbox(backend: str, root: Path, image: str) -> Sandbox:
         problem = docker_daemon_error()
         if problem:
             raise SandboxUnavailable(
-                f"the docker sandbox is not usable: {problem}. See docs/DEPLOYMENT.md "
+                f"the docker sandbox is not usable: {problem}. See docs/guide/deployment.md "
                 "(Execution sandbox) for how to give the worker a sandbox."
             )
         return DockerSandbox(root, image)

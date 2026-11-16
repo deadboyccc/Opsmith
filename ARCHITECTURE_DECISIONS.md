@@ -1,7 +1,7 @@
 # Architecture Decisions
 
 This file records the chosen stack and every significant deviation from the reference design
-in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) (spec §14–15). Each entry gives the decision,
+in [the specification](docs/development/specification.md) (spec §14–15). Each entry gives the decision,
 the alternatives considered, and the reason. The end goal and the §8 hard constraints (human
 approval before any code change, no autonomous merge, least privilege, redaction before LLM
 calls) are preserved by every decision below.
@@ -100,7 +100,7 @@ calls) are preserved by every decision below.
 - **Reason.** Template fingerprints are stable enough to drive leads, dedup and verification
   in the MVP. The spec marks the vector store as optional, and it is deferred.
 
-## ADR-007 LLM layer: one gateway, deterministic offline provider, Claude via the official SDK
+## ADR-007 LLM layer: one gateway, a small provider interface, no vendor lock-in
 
 - **Decision.** Every LLM call goes through `LLMGateway`, which enforces the provider
   allowlist (process ∩ project), per-stage model selection, a second redaction pass,
@@ -112,6 +112,20 @@ calls) are preserved by every decision below.
   - `anthropic`: the official `anthropic` SDK (2.x). `messages.parse(output_format=<schema>)`
     handles structured stages, effort is set per stage, the default model is
     `claude-opus-5-5`, and server-side refusal fallbacks are enabled by default.
+  - `openai`: any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure OpenAI, Ollama,
+    vLLM, LM Studio, LiteLLM, OpenRouter, ...) over plain HTTP, with no vendor SDK. It asks
+    for `json_schema` output and falls back to plain JSON mode with the schema in the prompt,
+    and adapts to servers that want `max_completion_tokens`. The gateway validates the result
+    either way.
+  - Others can be added as plugins (the `opsmith.llm_providers` entry point).
+- **Coding agents** follow the same split: `heuristic`, `claude` and `openai` all drive one
+  fixed tool set through one dispatcher (ADR-011).
+- **Where the endpoint is configured.** The base URL and key of the `openai` provider are
+  operator settings. A project chooses a provider name and a model, never a URL, so project
+  configuration cannot redirect model traffic (compare ADR-018).
+- **Prices.** A stage may carry `input_price_per_mtok` / `output_price_per_mtok`; they take
+  precedence over the built-in list. Without them, a model that is not in the list is costed
+  at the most expensive known rate rather than at zero.
 - **Accounting.** Every billed call is recorded, including ones that fail: a refusal, a
   truncated response, or output that never validates. An analysis run whose model call fails
   ends as `failed` and commits, so its cost counts against the caps; otherwise a persistently
@@ -121,7 +135,8 @@ calls) are preserved by every decision below.
 - **Framing.** Untrusted payloads are serialized so they cannot contain the closing
   `</untrusted_data>` tag. The gateway redacts identifiers too, so callers match the model's
   citations against the redacted form the model actually saw.
-- **Alternatives.** LangChain or LiteLLM abstractions; calling only remote models.
+- **Alternatives.** LangChain or LiteLLM as the abstraction (LiteLLM remains usable *behind*
+  the `openai` provider as a gateway); calling only remote models; one SDK per vendor.
 - **Reason.** A thin, explicit gateway is easier to audit for the §8 controls than a framework,
   and the deterministic provider makes the full pipeline testable without network access.
 
@@ -233,7 +248,7 @@ calls) are preserved by every decision below.
   cookie and also rejects cross-origin form posts. CSP is `default-src 'self'`.
 - **What a tenant is.** Tenancy isolates data. It is not a security boundary between hostile
   parties, because all tenants share the workers, and a tenant's admins configure what those
-  workers fetch and run. See ADR-018 for the limits placed on that, and `docs/SECURITY.md`
+  workers fetch and run. See ADR-018 for the limits placed on that, and `docs/guide/security.md`
   for what remains.
 - **Follow-up.** OIDC/SSO for human users; key expiry and rotation.
 
@@ -257,8 +272,8 @@ calls) are preserved by every decision below.
 | Decision | MVP choice |
 |---|---|
 | Interval X | 6h default per project (`inference_interval_hours`), with a per-service override |
-| Connectors / SCM | file logs, file metrics, Loki, Prometheus, push API; GitHub (+ local); more via entry points (`opsmith.connectors`, `opsmith.analyzers`) |
-| LLM per stage / cost ceilings | `heuristic` by default; `claude-opus-5-5` for every stage when enabled. Defaults: 400k tokens/run, $5/run, $50/day per project |
+| Connectors / SCM | file logs, file metrics, Loki, Prometheus, push; GitHub (+ local); more via entry points (`opsmith.connectors`, `opsmith.analyzers`, `opsmith.llm_providers`) |
+| LLM per stage / cost ceilings | `heuristic` by default; any OpenAI-compatible model or Claude per stage when configured. Defaults: 400k tokens/run, $5/run, $50/day per project, covering every stage including the coding agent |
 | Stack | ADR-001 |
 | PR review comments | Not in MVP (ADR-012) |
 

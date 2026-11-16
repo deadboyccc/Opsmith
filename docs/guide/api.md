@@ -51,7 +51,7 @@ export KEY=osk_...                      # an admin key
 # Who am I?
 curl -s -H "Authorization: Bearer $KEY" $OPSMITH/api/v1/me
 
-# Create a project (settings are optional; see CONFIGURATION.md)
+# Create a project (settings are optional; see the Configuration page)
 curl -s -X POST $OPSMITH/api/v1/projects -H "Authorization: Bearer $KEY" \
   -H 'Content-Type: application/json' -d '{"name": "payments"}'
 
@@ -68,7 +68,7 @@ curl -s -H "Authorization: Bearer $KEY" $OPSMITH/api/v1/tasks/$TASK_ID/provenanc
 ```
 
 Most people configure projects with a TOML file and `opsmith apply` instead of these calls;
-see [CONFIGURATION.md](CONFIGURATION.md).
+see [Configuration](configuration.md).
 
 ## Endpoints
 

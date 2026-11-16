@@ -37,7 +37,7 @@ empty with a command to generate one. CI asserts that the file refuses an empty 
   review. There is no fallback to a weaker sandbox.
 - The Compose stack does not silently execute without isolation. Execution in Compose needs the
   explicit `docker-compose.sandbox.yml` overlay, whose trade-off (the worker holds the Docker
-  socket) is stated in the file and in [DEPLOYMENT.md](DEPLOYMENT.md#execution-sandbox).
+  socket) is stated in the file and in [Deployment](../guide/deployment.md#execution-sandbox).
 
 ## P0 · Bind approval to the exact work being authorized
 
@@ -89,13 +89,13 @@ isolation is future work.
 | Secret redaction | `tests/test_redaction.py`, `tests/test_ingestion_hardening.py` |
 | Prompt injection in logs and source code | `test_untrusted_content_cannot_close_its_own_data_block`, `test_gateway_redacts_before_provider_and_guards_injection` |
 | Invented evidence | `test_untrusted_model_output_is_contained` and the bounds tests in `tests/test_inference.py` |
-| SSRF in connectors | `tests/test_ingestion_hardening.py` (link-local and metadata addresses refused); see the stated limit in [SECURITY.md](SECURITY.md#what-is-not-protected) |
+| SSRF in connectors | `tests/test_ingestion_hardening.py` (link-local and metadata addresses refused); see the stated limit in [Security](../guide/security.md#what-is-not-protected) |
 | Queue duplicate delivery | `test_enqueue_is_idempotent`, `test_slow_job_keeps_its_lease_through_the_heartbeat`, `test_worker_that_lost_its_lease_does_not_overwrite_the_new_owner` |
 | Crash recovery | `test_expired_leases_are_recovered`, `test_job_that_keeps_killing_its_worker_is_dead_lettered` |
 | Dead-job retry | `test_worker_success_retry_and_dead_letter`, `test_trigger_and_dead_job_retry` |
 | Audit-log and run immutability | `test_finished_runs_are_immutable_and_slots_idempotent` |
 
-Writing these tests found real defects, all fixed; the [changelog](../CHANGELOG.md) lists them.
+Writing these tests found real defects, all fixed; the [changelog](../../CHANGELOG.md) lists them.
 
 **Open.** The audit log is append-only by convention in the application; it is not protected
 against someone with direct database access.
@@ -112,18 +112,27 @@ finding quality as unmeasured.
 
 Done:
 
-- Documentation rewritten for three audiences: evaluating
-  ([README](../README.md), [ARCHITECTURE.md](ARCHITECTURE.md)), operating
-  ([DEPLOYMENT.md](DEPLOYMENT.md), [CONFIGURATION.md](CONFIGURATION.md), [API.md](API.md),
-  [SECURITY.md](SECURITY.md)) and developing ([CONTRIBUTING.md](../CONTRIBUTING.md),
-  [AGENTS.md](../AGENTS.md)).
-- A [changelog](../CHANGELOG.md).
+- Documentation rewritten and split by reader ([index](../README.md)). For people using
+  Opsmith: [Getting started](../guide/getting-started.md), [Concepts](../guide/concepts.md),
+  [Configuration](../guide/configuration.md), [Models](../guide/models.md),
+  [Deployment](../guide/deployment.md), [Operations](../guide/operations.md),
+  [API](../guide/api.md) and [Security](../guide/security.md). For people changing it:
+  [CONTRIBUTING.md](../../CONTRIBUTING.md), [AGENTS.md](../../AGENTS.md),
+  [Architecture](architecture.md) and [Testing](testing.md). Every link and every cited test
+  is checked in CI.
+- A [changelog](../../CHANGELOG.md).
 - The README states plainly what has been tested against real services and what only against
   fixtures, and no longer describes pull requests as "ready to merge".
 
-Not done: a GitHub About description and topics, screenshots, a recorded demo, a tested
-connector and version matrix, and a public roadmap. The first two are repository settings; the
-rest need time with a live deployment.
+- Screenshots of the review queue, a task with its provenance chain and every other page, in
+  the [UI tour](../guide/ui-tour.md). They are generated from the offline demo, so they can be
+  regenerated when the UI changes.
+- A step-by-step [getting-started guide](../guide/getting-started.md) whose commands were run
+  as written.
+
+Not done: a GitHub About description and topics, a recorded demo, a tested connector and
+version matrix, and a public roadmap. The first is a repository setting; the rest need time
+with a live deployment.
 
 ## Roadmap items from the review
 

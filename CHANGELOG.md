@@ -7,8 +7,8 @@ anything may change between releases.
 ## Unreleased
 
 A hardening release that follows the
-[independent project review](docs/independent-project-review.md). It adds no product features.
-[docs/REVIEW_RESPONSE.md](docs/REVIEW_RESPONSE.md) maps the review's items to this work.
+[independent project review](docs/development/independent-project-review.md). It adds no product features.
+[The review response](docs/development/review-response.md) maps the review's items to this work.
 
 ### Upgrade notes
 
@@ -76,6 +76,14 @@ A hardening release that follows the
 
 ### Fixed
 
+- **The coding agent's spending was outside the cost budgets.** It was recorded on the
+  execution run only, so the daily cap and the per-run cost cap ignored the most expensive
+  stage. It is now written to the same ledger as every other stage; an execution does not
+  start a model-driven agent when the day's budget is spent, and the agent stops at the per-run
+  cap or what is left of the day. A model call that fails part-way keeps what was already
+  spent.
+- **The demo failed when run twice within one second** against the same database (this made CI
+  fail intermittently).
 - **Costs were lost when a model call failed.** Failed, refused and truncated calls were billed
   but not recorded, so budget caps could not trip. They are now recorded and the run is marked
   `failed`.
@@ -135,8 +143,14 @@ A hardening release that follows the
   `OPSMITH_OPENAI_BASE_URL`, `OPSMITH_OPENAI_API_KEY_REF`, `OPSMITH_OPENAI_JSON_MODE`.
 - Adversarial tests (`tests/test_hardening.py` and others), tests that start real containers,
   and the whole suite on PostgreSQL in CI.
-- Documentation: `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/DEPLOYMENT.md`,
-  `docs/API.md`, `docs/SECURITY.md`, `docs/REVIEW_RESPONSE.md`, `CONTRIBUTING.md`, this file.
+- A provider parity test: the acceptance scenario runs with every model stage and the coding
+  agent going through the OpenAI-compatible HTTP path and must end exactly as the offline run.
+- A [UI tour](docs/guide/ui-tour.md) with screenshots generated from the offline demo
+  (`scripts/ui_screenshots.py`).
+- Documentation, split by reader ([index](docs/README.md)): a user guide under `docs/guide/`
+  (getting started, UI tour, concepts, configuration, models, deployment, operations, API,
+  security) and contributor pages under `docs/development/` (architecture, testing), plus
+  `CONTRIBUTING.md` and this file. `scripts/check_docs.py` checks every link and anchor in CI.
 
 ## 0.1.0
 

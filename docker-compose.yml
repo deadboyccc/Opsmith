@@ -6,7 +6,7 @@
 #
 # This file on its own analyzes, audits, ranks and takes reviews. Executing approved tasks
 # needs a sandbox, which is a deliberate extra step: see docker-compose.sandbox.yml and
-# docs/DEPLOYMENT.md.
+# docs/guide/deployment.md.
 name: opsmith
 
 x-opsmith: &opsmith

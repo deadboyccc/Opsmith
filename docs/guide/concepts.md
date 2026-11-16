@@ -1,16 +1,15 @@
-# How Opsmith works
+# Concepts
 
-This page explains the ideas, the lifecycles and the moving parts. It is the place to start if
-you want to understand Opsmith before you run or change it. For the reasons behind each design
-choice, see [ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md).
+How Opsmith thinks: the seven terms it uses, what each stage of the pipeline does, and how
+leads and tasks move through their lifecycles. Read this to understand what you see in the UI.
+If you want to change Opsmith itself, the internals are in
+[development/architecture.md](../development/architecture.md).
 
 - [Key concepts](#key-concepts)
 - [The pipeline, stage by stage](#the-pipeline-stage-by-stage)
 - [Lifecycles](#lifecycles)
 - [From approval to pull request](#from-approval-to-pull-request)
-- [Processes and storage](#processes-and-storage)
-- [Jobs, schedules and failure handling](#jobs-schedules-and-failure-handling)
-- [Where the code lives](#where-the-code-lives)
+- [What never gets lost](#what-never-gets-lost)
 
 ## Key concepts
 
@@ -230,79 +229,15 @@ Points worth knowing:
 - **Concurrency is bounded per project,** and tasks that touch the same files wait for each
   other.
 
-## Processes and storage
+## What never gets lost
 
-```mermaid
-flowchart TB
-    USERS["Reviewers and admins<br/>browser or API"] --> API
-    PUSH["Collectors<br/>push API"] --> API
+Every stage is a queued job that is retried when it fails. A failure always ends somewhere you
+can see it:
 
-    subgraph OPS["Opsmith processes"]
-        API["api<br/>REST API + review UI"]
-        SCHED["scheduler<br/>enqueues due jobs"]
-        WORKER["worker (1..n)<br/>runs pipeline jobs"]
-    end
+- a **retry**, with backoff;
+- a **dead job** with a notification, once its retries are used up (*Jobs* in the UI; an admin
+  can retry it);
+- a **task back in the review queue** with a report, when an execution fails or is refused;
+- a **finding marked suppressed** with the reason, when it is filtered out or is a duplicate.
 
-    DB[("PostgreSQL<br/>entities, job queue, audit log")]
-    OBJ[("Data directory<br/>raw signals")]
-
-    API <--> DB
-    SCHED --> DB
-    WORKER <--> DB
-    WORKER --> OBJ
-    WORKER --> SRC["Loki · Prometheus · files"]
-    WORKER --> LLM["LLM gateway<br/>offline rules, Claude, or any<br/>OpenAI-compatible endpoint"]
-    WORKER --> SANDBOX["Sandbox containers<br/>no network"]
-    WORKER --> GH["GitHub<br/>branch push and PR only"]
-```
-
-Python 3.12, FastAPI, SQLAlchemy 2, Pydantic 2, uv. PostgreSQL in production; SQLite for
-development and tests. Every row carries a tenant id, and every query filters on it.
-
-Model access is behind one gateway and a small provider interface. Three providers ship
-(`heuristic`, `anthropic`, `openai`), and others can be added as plugins; see
-[CONFIGURATION.md](CONFIGURATION.md#models).
-
-## Jobs, schedules and failure handling
-
-Every stage is a job in a database-backed queue.
-
-- **Idempotent enqueue.** Each job has a key derived from the work it stands for, so enqueueing
-  twice yields one job. Follow-up work is enqueued in the same transaction as the state it
-  depends on.
-- **Retries.** A failing job is retried with exponential backoff. When its attempts are used up
-  it becomes `dead`: audited, notified, visible in the UI, and retryable by an admin.
-- **Leases.** A worker holds a job under a lease that it renews while it is alive. A slow job is
-  never handed to a second worker; a dead worker's job is picked up after the lease expires.
-- **Waiting is not failing.** A handler can ask to be run later (for example while another task
-  touches the same files) without using up an attempt.
-- **Schedules** live in the database: an interval or a five-field cron expression per connector,
-  service, repository and project. The slot is part of the job key, so several schedulers or
-  repeated ticks never double-enqueue, and missed slots collapse into one run. A schedule that
-  cannot be computed is disabled and audited rather than stopping the others.
-
-Nothing is dropped silently. Every failure ends in one of four visible places: a retry, a dead
-job with a notification, a task back in review with a report, or a finding marked suppressed
-with a reason.
-
-## Where the code lives
-
-| Path under `src/opsmith/` | Responsibility |
-|---|---|
-| `platform.py` | Wires everything together and maps job kinds to handlers. Start reading here |
-| `models.py`, `schemas.py` | Database entities; settings and model-output schemas |
-| `connectors/`, `etl/` | Signal sources (Loki, Prometheus, files, push); normalize, redact, store, bundle |
-| `redaction.py` | Secret and PII detectors, shared by ingestion, the gateway and the diff gate |
-| `inference/orchestrator.py` | Chained analysis runs and the lead lifecycle |
-| `audits/` | Analyzers, external tool wrappers, the audit runner |
-| `aggregation/` | Correlation, dedup, suppression, scoring, task drafting |
-| `review.py` | The human review gate and the approval scope digest |
-| `executor/` | Sandboxes, the confined workspace, coding agents, the execution service, PR text |
-| `scm/` | GitHub and local git providers. No merge operation, by design |
-| `tracking.py` | PR and CI tracking; post-merge verification |
-| `llm/` | The gateway every model call goes through, prompts, pricing, and the providers (`heuristic`, `anthropic`, `openai`) |
-| `queue.py`, `scheduler.py` | The job queue and schedules |
-| `audit_log.py` | The audit trail, the task and lead state machines, run immutability |
-| `localfs.py`, `config.py`, `protection.py` | Host-file confinement; process settings and credential references; protected paths |
-| `api/`, `ui/` | REST API (`/api/v1`) and the server-rendered UI (`/ui`) |
-| `cli.py`, `demo.py` | The `opsmith` command; the offline end-to-end scenario |
+[Operations](operations.md) covers what to watch and what to do about each.

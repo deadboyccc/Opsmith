@@ -19,12 +19,16 @@ uv run opsmith demo --dir /tmp/opsmith-demo   # the whole loop, offline; ends wi
 
 No local Python? `make docker-test` runs the same checks inside a container.
 
+[`docs/development/testing.md`](docs/development/testing.md) explains the test suite, including
+how to run it on PostgreSQL, with real sandbox containers, and against a live model. Internals
+are in [`docs/development/architecture.md`](docs/development/architecture.md).
+
 ## Make a change
 
 ```bash
 uv run pytest tests/test_<area>.py -q    # iterate on the area you are touching
 make fmt                                 # auto-fix lint and formatting
-make check                               # everything CI runs: ruff, format, mypy, tests + coverage
+make check                               # everything CI runs: ruff, format, mypy, tests + coverage, docs links
 ```
 
 What reviewers look for:
@@ -35,8 +39,10 @@ What reviewers look for:
 - **Tests stay offline.** Use `httpx.MockTransport` and fake clients; never the network.
 - **No silent drops.** A failure must end as a retry, a dead job with a notification, a task
   back in review with a report, or a finding marked suppressed with a reason.
-- **Docs move with the code.** Update the relevant page under `docs/`, and
-  `ARCHITECTURE_DECISIONS.md` for a design change. Add a line to `CHANGELOG.md`.
+- **Docs move with the code.** Pages for people *using* Opsmith are under `docs/guide/`; pages
+  for people *changing* it are under `docs/development/`. Update the one your change affects,
+  `ARCHITECTURE_DECISIONS.md` for a design change, and add a line to `CHANGELOG.md`.
+  `make docs` checks every link.
 
 ## Commits and pull requests
 
@@ -49,6 +55,6 @@ What reviewers look for:
 
 - Bugs and ideas: open an issue with what you did, what happened and what you expected.
 - Security problems: do not open a public issue. See
-  [`docs/SECURITY.md`](docs/SECURITY.md#reporting-a-vulnerability).
+  [the security page](docs/guide/security.md#reporting-a-vulnerability).
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

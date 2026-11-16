@@ -2,7 +2,7 @@
 UV ?= uv
 DEV_IMAGE ?= opsmith-dev
 
-.PHONY: help setup lint fmt type test cov check demo run docker-dev docker-test clean
+.PHONY: help setup lint fmt type test cov docs check demo run docker-dev docker-test clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -11,12 +11,12 @@ setup: ## Install all dependencies (incl. dev + extras)
 	$(UV) sync --all-extras
 
 lint: ## Ruff lint + format check
-	$(UV) run ruff check src tests
-	$(UV) run ruff format --check src tests
+	$(UV) run ruff check src tests scripts
+	$(UV) run ruff format --check src tests scripts
 
 fmt: ## Auto-fix lint and format
-	$(UV) run ruff check src tests --fix
-	$(UV) run ruff format src tests
+	$(UV) run ruff check src tests scripts --fix
+	$(UV) run ruff format src tests scripts
 
 type: ## mypy
 	$(UV) run mypy
@@ -27,7 +27,10 @@ test: ## Run tests
 cov: ## Tests with coverage report
 	$(UV) run pytest -q --cov --cov-report=term
 
-check: lint type cov ## Everything CI runs
+docs: ## Check documentation links, anchors and cited tests
+	$(UV) run python scripts/check_docs.py
+
+check: lint type cov docs ## Everything CI runs
 
 demo: ## Offline end-to-end demo
 	$(UV) run opsmith demo --dir ./opsmith-demo

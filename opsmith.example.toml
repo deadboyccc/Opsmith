@@ -9,7 +9,7 @@ inference_interval_hours = 6        # "X" - per-service override via services.in
 lead_max_carry = 3
 audit_cron = "0 2 * * *"            # nightly; a full audit at least every audit_full_every_days
 audit_full_every_days = 7
-executor_agent = "heuristic"        # or "claude" / "openai" (any OpenAI-compatible endpoint); see docs/CONFIGURATION.md
+executor_agent = "heuristic"        # or "claude" / "openai" (any OpenAI-compatible endpoint); see docs/guide/models.md
 protected_paths = [
   { pattern = ".github/**", mode = "elevated" },
   { pattern = "**/auth/**", mode = "elevated" },

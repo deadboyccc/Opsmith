@@ -8,7 +8,7 @@ Opsmith has two layers of configuration:
 | **Project configuration** | Tenant admins | A TOML file, the API, or the UI | Repositories, connectors, intervals, budgets, protected paths |
 
 This page covers project configuration. Process settings are listed in
-[DEPLOYMENT.md](DEPLOYMENT.md#environment-variables).
+[Deployment](deployment.md#environment-variables).
 
 - [The configuration file](#the-configuration-file)
 - [Projects and settings](#projects-and-settings)
@@ -59,7 +59,7 @@ service = "payments-api"
 config = { url = "http://loki:3100", query = '{service_name="payments-api"}' }
 ```
 
-[`opsmith.example.toml`](../opsmith.example.toml) is a complete, annotated example.
+[`opsmith.example.toml`](../../opsmith.example.toml) is a complete, annotated example.
 
 If anything in the file is invalid, `opsmith apply` prints what is wrong and writes nothing.
 Unknown keys are errors, so a typo cannot be silently ignored.
@@ -124,7 +124,7 @@ audit_types = ["security", "bugs", "dependency", "compliance", "performance"]
 | Key | Meaning |
 |---|---|
 | `scm_provider` | `github`, or `local` for a git repository on the worker's disk (development and the demo). A `local` repository's `url` is a path and must be inside `OPSMITH_LOCAL_ROOT` |
-| `credentials_ref` | Where the token comes from. See [Credentials](#credentials) and the [token permissions](DEPLOYMENT.md#connecting-a-github-repository) |
+| `credentials_ref` | Where the token comes from. See [Credentials](#credentials) and the [token permissions](deployment.md#connecting-a-github-repository) |
 | `build_command`, `lint_command`, `test_command` | The checks. Each is optional. They run **only inside the sandbox**, where there is **no network**: they must work with what the sandbox image already contains. Do not put `pip install` or `npm ci` in them |
 | `audit_types` | Which audits run: `security`, `bugs`, `compliance`, `performance`, `dependency`, `coverage` |
 
@@ -233,7 +233,7 @@ service = "payments-api"
 ```
 
 Records are sent to `POST /api/v1/connectors/{id}/push` with a `service` key; see
-[API.md](API.md#pushing-signals). The other connector types accept pushed records as well.
+[API](api.md#pushing-signals). The other connector types accept pushed records as well.
 
 ### Where connectors may connect
 
@@ -289,86 +289,9 @@ full output allowance), so set `max_tokens_per_run` comfortably above the stage'
 
 ## Models
 
-Opsmith is not tied to one model vendor. Each stage uses a **provider** and a **model**:
-
-| Provider | What it is | Needs |
-|---|---|---|
-| `heuristic` (default) | Deterministic rules, built in. Works offline and is what the demo and the tests use | Nothing |
-| `anthropic` | Claude, through the official SDK | `ANTHROPIC_API_KEY` |
-| `openai` | **Any OpenAI-compatible endpoint:** OpenAI, Azure OpenAI, Ollama, vLLM, LM Studio, llama.cpp, LiteLLM, OpenRouter, Groq, Mistral, Together and others | The endpoint's URL, set by the operator; a key if the endpoint wants one |
-
-The operator decides which endpoints exist ([DEPLOYMENT.md](DEPLOYMENT.md#choosing-a-model));
-a project chooses among them:
-
-```toml
-[projects.settings]
-executor_agent = "openai"                  # who implements approved tasks: heuristic | claude | openai
-
-[projects.settings.llm.default]            # analysis, triage and task drafting
-provider = "openai"
-model = "qwen2.5-coder:14b"                # whatever your endpoint calls the model
-max_tokens = 8000
-input_price_per_mtok = 0                   # USD per million tokens; 0 for a local model
-output_price_per_mtok = 0
-
-[projects.settings.llm.stages.executor]    # the coding agent can use a different model
-provider = "openai"
-model = "qwen2.5-coder:32b"
-input_price_per_mtok = 0
-output_price_per_mtok = 0
-```
-
-The same with Claude:
-
-```toml
-[projects.settings]
-executor_agent = "claude"
-
-[projects.settings.llm.default]
-provider = "anthropic"
-model = "claude-opus-5-5"
-effort = "medium"                          # low | medium | high | xhigh | max (Claude only)
-
-[projects.settings.llm.stages.executor]
-provider = "anthropic"
-model = "claude-opus-5-5"
-effort = "high"
-```
-
-Things to know:
-
-- **Stages** you can configure separately under `llm.stages`: `inference` (analysis), `triage`
-  (audit false-positive filtering), `task` (task drafting) and `executor` (the coding agent).
-  Anything not listed uses `llm.default`. You can mix providers, for example a local model
-  for triage and a hosted one for the coding agent.
-- **`executor_agent`** goes with the executor stage. `openai` requires the executor stage (or
-  the default) to be an `openai` model. `claude` uses the executor stage's model when that is
-  an `anthropic` one, and `claude-opus-5-5` otherwise. `heuristic` needs no model: it applies
-  a small set of deterministic fixes and gives up on everything else.
-- **Prices.** Opsmith has list prices for `claude-opus-5-5`, `claude-sonnet-5-5`,
-  `claude-haiku-5-5` and `claude-fable-5-2`. For any other model, set
-  `input_price_per_mtok` and `output_price_per_mtok` on the stage. If you do not, the model is
-  costed at the most expensive rate Opsmith knows, so a budget is never bypassed by an
-  unpriced model; a local model would then appear to cost money until you set its price to 0.
-- **Structured output.** Every stage must return JSON matching a schema. Opsmith asks the
-  endpoint to enforce it, falls back to plain JSON mode when the endpoint cannot, and
-  validates the result itself either way. A model that cannot produce valid JSON for a stage
-  makes that run `failed`; nothing is guessed.
-- **The coding agent needs tool calling.** Pick a model your endpoint serves with function
-  or tool calling enabled.
-- **Small models work but find less.** The protocol is the same for every model; the quality
-  of findings and fixes is the model's.
-
-To restrict a project further than the process allows:
-
-```toml
-[projects.settings.llm]
-provider_allowlist = ["heuristic"]         # this project never sends data to a remote model
-```
-
-Other providers can be added without changing Opsmith, as a Python package that registers an
-entry point in the `opsmith.llm_providers` group (a callable that takes the process settings
-and returns an object with a `name` and a `complete(request)` method).
+Which model each stage uses is part of the project settings (`executor_agent` and
+`[projects.settings.llm]`). It has its own page, with the provider options, per-stage
+examples, prices and what a model must support: **[Models](models.md)**.
 
 ## Policy rules and licenses
 
@@ -443,7 +366,7 @@ redaction_extra_patterns = ['ACME-[0-9]{8}', 'session=[A-Za-z0-9]+']
 
 Each match is replaced by a marker such as `[REDACTED:custom_0]`. Patterns are validated when
 saved. See the limits of pattern-based redaction in
-[SECURITY.md](SECURITY.md#what-is-not-protected).
+[Security](security.md#what-is-not-protected).
 
 ## Credentials
 
@@ -471,7 +394,7 @@ curl -X PATCH $OPSMITH/api/v1/schedules/$SCHEDULE_ID -H "Authorization: Bearer $
 ```
 
 Timing set this way is kept when project settings change later. To run a stage once, right
-now, use `POST /api/v1/projects/{id}/trigger` ([API.md](API.md#endpoints)).
+now, use `POST /api/v1/projects/{id}/trigger` ([API](api.md#endpoints)).
 
 Settings can also be edited as JSON in the UI under *Config* (admins only). The UI replaces the
 whole settings object; the API's `PATCH` replaces only the top-level keys you send.

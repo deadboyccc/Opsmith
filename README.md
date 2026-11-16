@@ -114,29 +114,30 @@ traces point at `app/payments.py:10`, plus an audit finding for an HTTP call wit
 on that line, become one task with higher confidence than either alone. Every pull request can
 be traced back: **PR → execution → review → task → findings → evidence → analysis runs → leads.**
 
-The seven terms above (signal, bundle, lead, finding, task, review, execution), the lifecycles
-and the architecture are explained in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The seven terms above (signal, bundle, lead, finding, task, review, execution) and the
+lifecycles of leads and tasks are explained in [Concepts](docs/guide/concepts.md).
 
 ## Quickstart
 
-### Try it on your machine (development)
+### Your own project, on your machine
+
+**[Getting started](docs/guide/getting-started.md)** walks through it step by step: set up a
+project for a repository of yours, send it logs, and get your first task and pull request. It
+takes about fifteen minutes and needs no API key, no Docker and no network. In short:
 
 ```bash
-uv sync --all-extras
-export OPSMITH_SANDBOX_BACKEND=local      # development only: no isolation, local repositories only
-export OPSMITH_LOCAL_ROOT=$HOME/opsmith   # the one directory Opsmith may read repos and log files from
-uv run opsmith init --tenant dev          # prints an admin API key, shown once
-uv run opsmith run                        # API + scheduler + worker in one process
+export OPSMITH_LOCAL_ROOT=$HOME/opsmith-lab     # the one directory Opsmith may read repos and files from
+export OPSMITH_DATA_DIR=$HOME/opsmith-lab/data
+export OPSMITH_SANDBOX_BACKEND=local            # development only: no isolation, local repositories only
+
+uv run opsmith init --tenant lab --admin "You"            # prints an admin API key, shown once
+uv run opsmith apply opsmith.toml --tenant lab            # your project; see the guide for the file
+uv run opsmith run                                        # API + scheduler + worker in one process
 ```
 
-Open <http://127.0.0.1:8000/ui>. Describe a project in a TOML file
-([`opsmith.example.toml`](opsmith.example.toml) shows every option) and apply it:
+Then open <http://127.0.0.1:8000/ui>.
 
-```bash
-uv run opsmith apply opsmith.toml --tenant dev
-```
-
-### Run the full stack (Docker Compose, PostgreSQL)
+### The full stack (Docker Compose, PostgreSQL)
 
 ```bash
 cp .env.example .env
@@ -147,8 +148,14 @@ docker compose exec api opsmith init --tenant acme --admin "Your Name"
 
 This runs the API, a worker, the scheduler and PostgreSQL. To let it **execute** approved tasks
 you also choose a sandbox, which is a deliberate step:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#execution-sandbox) explains the options and the
-trade-offs, connects a GitHub repository, and shows how to plug in the model you want to use.
+[Deployment](docs/guide/deployment.md#execution-sandbox) explains the options and the
+trade-offs, and how to connect a GitHub repository.
+
+### The model you want
+
+Out of the box Opsmith uses built-in offline rules. To use a real model, point it at any
+OpenAI-compatible endpoint (OpenAI, Azure OpenAI, Ollama, vLLM, LiteLLM, ...) or at Claude, and
+pick a model per stage. [Models](docs/guide/models.md) has the three-line setups.
 
 ### Command line
 
@@ -176,7 +183,7 @@ trade-offs, connects a GitHub repository, and shows how to plug in the model you
 | **Audit trail** | Every state change and decision is recorded; finished analysis runs are immutable |
 
 Each of these is mapped to its enforcement point and to the tests that try to break it in
-[docs/SECURITY.md](docs/SECURITY.md), together with the limits you should know about.
+[Security](docs/guide/security.md), together with the limits you should know about.
 
 ## What has been tested
 
@@ -195,28 +202,42 @@ Honest scope, so you can judge it:
 There are no published quality metrics yet (precision of findings, share of pull requests
 merged, verified-fix rate). That, a tested connector matrix and schema migrations are the main
 open work; see the [changelog](CHANGELOG.md) and
-[the review response](docs/REVIEW_RESPONSE.md).
+[the review response](docs/development/review-response.md).
 
 ## Documentation
 
-| Read this | For |
+The full index is in [docs/README.md](docs/README.md). The pages are split by reader.
+
+**Using Opsmith**
+
+| Page | Read it to |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it works: concepts, lifecycles, processes, where the code lives |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every project setting, connector, repository and model option |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Installing, the sandbox, GitHub, choosing a model, environment variables, operations |
-| [docs/API.md](docs/API.md) | Roles, authentication and the REST API |
-| [docs/SECURITY.md](docs/SECURITY.md) | Guarantees, how each is enforced and tested, and what is not protected |
-| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | Why each design choice was made, and the known limitations |
-| [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) | Developing Opsmith: setup, invariants, conventions |
-| [CHANGELOG.md](CHANGELOG.md) | What changed |
-| [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | The original product specification |
-| [docs/independent-project-review.md](docs/independent-project-review.md), [docs/REVIEW_RESPONSE.md](docs/REVIEW_RESPONSE.md) | An independent review of the project, and what was done about it |
+| [Getting started](docs/guide/getting-started.md) | Go from a fresh clone to your own project's first pull request |
+| [UI tour](docs/guide/ui-tour.md) | See what it looks like |
+| [Concepts](docs/guide/concepts.md) | Understand the terms, the pipeline and the lifecycles |
+| [Configuration](docs/guide/configuration.md) | Describe projects: repositories, connectors, budgets, protected paths |
+| [Models](docs/guide/models.md) | Use offline rules, any OpenAI-compatible endpoint, or Claude |
+| [Deployment](docs/guide/deployment.md) | Install it for real: Compose, the sandbox, GitHub, environment variables |
+| [Operations](docs/guide/operations.md) | Monitor, upgrade and troubleshoot it |
+| [API](docs/guide/api.md) | Authenticate, understand roles, call the REST API |
+| [Security](docs/guide/security.md) | Know what is guaranteed, which test proves it, and what is not protected |
+
+**Developing Opsmith**
+
+| Page | Read it to |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Set up, make a change, open a pull request |
+| [AGENTS.md](AGENTS.md) | Learn the invariants and conventions (for people and AI coding agents) |
+| [Architecture](docs/development/architecture.md) | Understand the internals and the plugin points |
+| [Testing](docs/development/testing.md) | Run and write tests |
+| [Architecture decisions](ARCHITECTURE_DECISIONS.md) | See why it is built this way, and the known limitations |
+| [Changelog](CHANGELOG.md) | See what changed |
 
 ## Contributing
 
 ```bash
 uv sync --all-extras
-make check        # what CI runs: ruff, format check, mypy, tests with coverage
+make check        # what CI runs: ruff, format check, mypy, tests with coverage, docs links
 ```
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). It is short.

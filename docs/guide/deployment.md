@@ -1,19 +1,18 @@
-# Deploying Opsmith
+# Deployment
 
-This guide takes you from nothing to a running installation, and explains the choices you have
-to make on the way. If you only want to see Opsmith work, run the offline demo in the
-[README](../README.md#quickstart) first.
+How to install Opsmith for real use: the processes, the two ways to run them, the execution
+sandbox, connecting GitHub, and every environment variable. For a first look on your own
+machine, start with [Getting started](getting-started.md) instead.
 
 - [What you are deploying](#what-you-are-deploying)
 - [Option 1: Docker Compose](#option-1-docker-compose)
 - [Option 2: Processes on a host](#option-2-processes-on-a-host)
 - [Execution sandbox](#execution-sandbox)
 - [Connecting a GitHub repository](#connecting-a-github-repository)
-- [Choosing a model](#choosing-a-model)
 - [Environment variables](#environment-variables)
-- [Operating it](#operating-it)
-- [Upgrading](#upgrading)
-- [Troubleshooting](#troubleshooting)
+
+Related pages: [Models](models.md) for choosing a model provider, and
+[Operations](operations.md) for running, upgrading and troubleshooting.
 
 ## What you are deploying
 
@@ -58,7 +57,7 @@ docker compose exec api opsmith init --tenant acme --admin "Your Name"
 
 1. Open <http://localhost:8000/ui> and sign in with the key.
 2. Describe your projects in a TOML file and apply it
-   (see [CONFIGURATION.md](CONFIGURATION.md)):
+   (see [Configuration](configuration.md)):
 
    ```bash
    docker compose cp opsmith.toml api:/tmp/opsmith.toml
@@ -77,7 +76,9 @@ proxy in front and set `OPSMITH_BASE_URL` to the public URL.
 
 At this point Opsmith ingests, analyzes, audits, ranks and takes reviews. It will **not**
 execute an approved task yet: the worker has no sandbox. An approval in this state returns the
-task to the review queue with the reason `sandbox unavailable`. Continue with the next section.
+task to the review queue with the reason `sandbox unavailable`. Giving it one is the
+[Execution sandbox](#execution-sandbox) section below. To use a real model instead of the
+offline rules, see [Models](models.md).
 
 ## Option 2: Processes on a host
 
@@ -190,59 +191,9 @@ Then:
 3. Reference it from the repository configuration: `credentials_ref = "env:GITHUB_TOKEN"` or
    `credentials_ref = "file:/run/secrets/github_token"`. The database stores only the reference.
 
-## Choosing a model
-
-Opsmith works with the model setup you prefer. Nothing is tied to one vendor.
-
-| Provider | Use it when | Operator setup |
-|---|---|---|
-| `heuristic` (default) | Trying Opsmith, air-gapped installs, CI | None. Rule-based, offline, limited to the patterns it knows |
-| `openai` | You have any OpenAI-compatible endpoint: OpenAI, Azure OpenAI, Ollama, vLLM, LM Studio, LiteLLM, OpenRouter and others | `OPSMITH_OPENAI_BASE_URL`, and a key if the endpoint needs one |
-| `anthropic` | You use Claude | `ANTHROPIC_API_KEY` (the container image includes the SDK; elsewhere install the `anthropic` extra) |
-
-The operator makes providers available with environment variables on the **worker**; each
-project then picks a provider and model per stage
-([CONFIGURATION.md](CONFIGURATION.md#models)).
-
-A local model with [Ollama](https://ollama.com), for example:
-
-```bash
-ollama pull qwen2.5-coder:14b
-# in .env: an address the worker can reach (http://localhost:11434/v1 when both run on one host)
-OPSMITH_OPENAI_BASE_URL=http://ollama-host:11434/v1
-```
-
-A hosted OpenAI-compatible service:
-
-```bash
-# in .env
-OPSMITH_OPENAI_BASE_URL=https://api.openai.com/v1               # the default
-OPENAI_API_KEY=sk-...
-```
-
-Notes:
-
-- The endpoint URL is operator configuration on purpose. Project configuration can choose a
-  model, never the URL model calls go to.
-- If your endpoint does not support `response_format: json_schema`, Opsmith notices and falls
-  back to plain JSON mode. Set `OPSMITH_OPENAI_JSON_MODE=json_object` to skip the probe.
-- For Azure OpenAI and other gateways, point `OPSMITH_OPENAI_BASE_URL` at the
-  OpenAI-compatible base path your deployment exposes.
-- The coding agent needs a model that supports tool calling.
-
-Whatever you choose:
-
-- Signals are redacted before they are stored and again immediately before every model call.
-- `OPSMITH_LLM_PROVIDER_ALLOWLIST` is the process-wide list of providers that may receive data
-  at all. Set it to `heuristic` to guarantee nothing leaves the process, or to
-  `heuristic,openai` with a local endpoint to keep everything on your own machines.
-- Costs are bounded per run and per project per day (`budgets` in the project settings). Calls
-  that fail, are refused or are cut off are still recorded and counted. Set prices for models
-  Opsmith has no list price for ([CONFIGURATION.md](CONFIGURATION.md#models)).
-
 ## Environment variables
 
-All are optional unless marked. [`.env.example`](../.env.example) lists the same settings.
+All are optional unless marked. [`.env.example`](../../.env.example) lists the same settings.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -269,53 +220,3 @@ All are optional unless marked. [`.env.example`](../.env.example) lists the same
 
 An invalid value stops the process at start with a message naming the setting.
 
-## Operating it
-
-**Health and metrics.** `GET /healthz` checks the database. `GET /metrics` is Prometheus text:
-stage latency, LLM calls, cost and latency, ingested records, executions, HTTP timing. Both are
-unauthenticated; keep the API port private or restrict those paths at your proxy.
-
-**Jobs.** Every stage is a queued job. A job that fails is retried with backoff; when its
-attempts are used up it becomes `dead`, which is audited and sent as a `job.dead`
-notification. See them in the UI under *Jobs*, or `GET /api/v1/jobs?status=dead`. An admin can
-retry a dead job from either place.
-
-**Workers.** Run as many as you need. A running job's lease is renewed while its worker is
-alive, so a slow job is never handed to a second worker. If a worker dies, its job is picked up
-again after `OPSMITH_WORKER_LEASE_SECONDS`. Stop workers with `SIGTERM`; they finish the current
-job first.
-
-**Notifications.** Configure a webhook per project to hear about tasks awaiting review, opened
-pull requests, failed executions, escalated leads, budget stops and dead jobs
-([CONFIGURATION.md](CONFIGURATION.md#notifications)).
-
-**Audit trail.** Every state change and decision is in the audit log:
-`GET /api/v1/audit-log`, or the task page in the UI.
-
-**Backups.** Back up the PostgreSQL database and the data directory together. The database is
-the source of truth; the data directory holds the raw signals that evidence refers to.
-
-## Upgrading
-
-Opsmith creates its tables at start and has **no schema migrations yet**
-([ADR-002](../ARCHITECTURE_DECISIONS.md)). A release that changes the schema says so in the
-[changelog](../CHANGELOG.md); until migrations exist, such an upgrade needs a fresh database.
-Treat current versions as pre-1.0: fine for evaluation and pilots, not yet for data you cannot
-recreate.
-
-## Troubleshooting
-
-| Symptom | Cause and fix |
-|---|---|
-| `required variable POSTGRES_PASSWORD is missing a value` | Set it in `.env`. This is deliberate |
-| Task returns to review with `sandbox unavailable` | The worker cannot use Docker. See [Execution sandbox](#execution-sandbox) |
-| Task returns to review with `sandbox policy` | `OPSMITH_SANDBOX_BACKEND=local` with a non-local repository. Use `docker` |
-| `docker could not start the sandbox` | The image is missing or cannot be pulled, or `OPSMITH_WORK_DIR` is not shared with the host at the same path |
-| Checks fail with download or DNS errors | The sandbox has no network. Bake dependencies into `OPSMITH_SANDBOX_IMAGE` |
-| `task changed after it was approved` | The task's scope changed between approval and execution. Review it again |
-| `... is outside OPSMITH_LOCAL_ROOT` or `reads the worker's filesystem, which is disabled` | Set `OPSMITH_LOCAL_ROOT` to the directory holding your local repositories and signal files |
-| `... names a variable reserved for the platform` | A `credentials_ref` pointed at one of Opsmith's own secrets. Use a dedicated variable |
-| An analysis run is `failed` with a validation error | The model did not return JSON matching the stage's schema, twice. Use a more capable model for that stage |
-| `model endpoint unreachable` or `HTTP 4xx` from the model endpoint | Check `OPSMITH_OPENAI_BASE_URL`, the key, and the model name in the project settings |
-| Permission denied on `/var/run/docker.sock` | `DOCKER_GID` does not match the socket's group |
-| UI form posts are rejected with 403 behind a proxy | The proxy must pass the browser's `Host` header through unchanged |
