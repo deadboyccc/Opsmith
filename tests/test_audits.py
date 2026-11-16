@@ -9,6 +9,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from opsmith import queue
 from opsmith.audits import analyzers_for, builtin, external, registered
 from opsmith.audits.base import (
     MAX_LINE_CHARS,
@@ -861,3 +862,31 @@ def test_a_file_name_that_is_not_utf8_does_not_fail_the_audit(platform, seed) ->
     with platform.db.session() as s:
         run = platform.audits.run(s, seed.repo.id, mode="incremental")
         assert (run.mode, run.base_sha, run.files_analyzed) == ("incremental", seed_sha, 1)
+
+
+def test_two_audits_of_one_repository_do_not_share_the_checkout(platform, seed) -> None:
+    """Audits of one repository use one checkout directory. A second audit starting while the
+    first was still analyzing reset and cleaned the tree under it (a manual trigger during a
+    scheduled run, with two workers). The second now waits its turn."""
+    refused: list[str] = []
+
+    class Reentrant(Analyzer):
+        name = "reentrant"
+        audit_types = ("security",)
+
+        def analyze(self, ctx: AuditContext) -> list[RawFinding]:
+            if not refused:
+                refused.append("started")
+                with platform.db.session() as other:
+                    try:
+                        platform.audits.run(other, seed.repo.id, mode="full")
+                    except queue.RetryLater as exc:
+                        refused.append(exc.reason)
+            return []
+
+    platform.audits.analyzer_factory = lambda _types: [Reentrant()]
+    with platform.db.session() as s:
+        assert platform.audits.run(s, seed.repo.id, mode="full").status == "succeeded"
+    assert refused == ["started", "another audit of this repository is running"]
+    with platform.db.session() as s:  # released when the first audit was done
+        assert platform.audits.run(s, seed.repo.id, mode="full").status == "succeeded"

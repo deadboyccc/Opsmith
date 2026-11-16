@@ -3,7 +3,11 @@ incremental (changed files since the last audited commit)."""
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -62,47 +66,49 @@ class AuditRunner:
         settings = ProjectSettings.model_validate(project.settings)
         types = audit_types or list(repo.audit_types)
         started = utcnow()
-        path = self.scm.for_provider(repo.scm_provider).checkout(repo, self.workdir / repo.id)
-        head = head_sha(path)
-        all_files = iter_repo_files(path)
-        mode = self._resolve_mode(session, repo, settings, mode)
-        files, base = all_files, None
-        if mode == "incremental" and repo.last_audited_sha:
-            try:
-                changed = changed_files(path, repo.last_audited_sha, head)
-                existing = set(all_files)
-                files = [f for f in changed if f in existing]
-                base = repo.last_audited_sha
-            except GitError:
-                mode = "full"  # base commit unreachable (force-push/shallow clone)
-        else:
-            mode = "full"
-
-        ctx = AuditContext(
-            repo_path=path,
-            repository_id=repo.id,
-            files=files,
-            all_files=all_files,
-            settings=settings,
-            commit_sha=head,
-        )
-        raws: list[RawFinding] = []
-        tools: dict[str, str] = {}
-        failed: list[str] = []
-        with METRICS.timer("opsmith_stage_seconds", stage="audit"):
-            for analyzer in self.analyzer_factory(types):
-                if not analyzer.available():
-                    tools[analyzer.name] = "unavailable"
-                    continue
+        # One checkout directory per repository, so one audit of it at a time on this host.
+        with self._checkout_lock(repo.id):
+            path = self.scm.for_provider(repo.scm_provider).checkout(repo, self.workdir / repo.id)
+            head = head_sha(path)
+            all_files = iter_repo_files(path)
+            mode = self._resolve_mode(session, repo, settings, mode)
+            files, base = all_files, None
+            if mode == "incremental" and repo.last_audited_sha:
                 try:
-                    raws.extend(analyzer.analyze(ctx))
-                    tools[analyzer.name] = analyzer.version()
-                except Exception as exc:  # one broken tool must not sink the run
-                    if isinstance(exc, AnalyzerError):
-                        raws.extend(exc.findings)  # what it found before it failed
-                    tools[analyzer.name] = f"error: {exc}"[:200]
-                    failed.append(analyzer.name)
-                    log.exception("analyzer failed", extra={"analyzer": analyzer.name})
+                    changed = changed_files(path, repo.last_audited_sha, head)
+                    existing = set(all_files)
+                    files = [f for f in changed if f in existing]
+                    base = repo.last_audited_sha
+                except GitError:
+                    mode = "full"  # base commit unreachable (force-push/shallow clone)
+            else:
+                mode = "full"
+
+            ctx = AuditContext(
+                repo_path=path,
+                repository_id=repo.id,
+                files=files,
+                all_files=all_files,
+                settings=settings,
+                commit_sha=head,
+            )
+            raws: list[RawFinding] = []
+            tools: dict[str, str] = {}
+            failed: list[str] = []
+            with METRICS.timer("opsmith_stage_seconds", stage="audit"):
+                for analyzer in self.analyzer_factory(types):
+                    if not analyzer.available():
+                        tools[analyzer.name] = "unavailable"
+                        continue
+                    try:
+                        raws.extend(analyzer.analyze(ctx))
+                        tools[analyzer.name] = analyzer.version()
+                    except Exception as exc:  # one broken tool must not sink the run
+                        if isinstance(exc, AnalyzerError):
+                            raws.extend(exc.findings)  # what it found before it failed
+                        tools[analyzer.name] = f"error: {exc}"[:200]
+                        failed.append(analyzer.name)
+                        log.exception("analyzer failed", extra={"analyzer": analyzer.name})
 
         # File names are bytes to git and need not be UTF-8; nothing below can store or send
         # the lone surrogates Python reads them as.
@@ -202,6 +208,24 @@ class AuditRunner:
             idempotency_key=f"aggregate:audit:{run.id}",
         )
         return run
+
+    @contextmanager
+    def _checkout_lock(self, repository_id: str) -> Iterator[None]:
+        """Hold the repository's checkout for one audit. A second audit that starts meanwhile
+        (a manual trigger during a scheduled run) would fetch, reset and clean the tree the
+        first is still reading; it is deferred instead. The lock is an advisory file lock, so
+        it also holds between worker processes that share the data directory, and the kernel
+        drops it if the worker dies."""
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.workdir / f"{repository_id}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise queue.RetryLater(60, "another audit of this repository is running") from None
+            yield
+        finally:
+            os.close(fd)  # closing the descriptor releases the lock
 
     @staticmethod
     def _resolve_mode(
