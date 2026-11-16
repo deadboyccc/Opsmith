@@ -23,6 +23,12 @@ the database schema says so under *Upgrade notes*.
   cookie now works for reads only; changes need the key in a header.
 - **Values nested under a credential-named field were stored unredacted**, for example
   `{"password": {"new": "..."}}`. Everything under such a field is now masked.
+- **An audited repository could reconfigure gitleaks and trivy.** A committed `.gitleaks.toml`
+  with an allowlist of `.*` hid every leaked secret; a committed `trivy.yaml` with `output:`
+  made trivy write its report to a path of the repository's choosing on the worker and leave
+  nothing to parse, which read as "no findings". gitleaks now gets the platform's own
+  configuration and trivy runs from an empty directory. Verified against gitleaks 8.30.1 and
+  trivy 0.76.2.
 - **Files whose name starts with `.opsmith-home` skipped the protected-path gate**, and a
   sandbox home replaced by a link or file could be committed. The home is now matched by exact
   path and always removed before the gates.
@@ -60,6 +66,9 @@ the database schema says so under *Upgrade notes*.
   schedule interval beyond PostgreSQL's `INTEGER`. Durations, intervals, counts and budgets now
   have upper bounds, checked when saved through the API or `opsmith apply`
   ([Configuration](docs/guide/configuration.md#projects-and-settings)).
+- **The gitleaks analyzer never produced a finding with current gitleaks.** It asked for the
+  report on `/dev/stdout`, which gitleaks 8.30 does not write to; every audit recorded a
+  gitleaks failure. It now uses `-`, gitleaks' documented name for stdout.
 - **One unstorable record stopped a connector for good.** A record nested more than 255
   levels deep, or with a service name or environment longer than its column (on PostgreSQL),
   failed the whole window, which was then retried until the job died, and nothing after it

@@ -86,7 +86,8 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | Invented ids and evidence are discarded | The orchestrator checks every reference against the run's input | `test_untrusted_model_output_is_contained` |
 | Only allowed providers receive data | Process allowlist intersected with the project's, for every provider | `test_provider_allowlist_is_enforced`, `test_openai_provider_is_subject_to_the_allowlists` |
 | Project configuration cannot redirect model calls | Model endpoints and their keys are operator settings; a project chooses only a provider name and a model | `test_settings_and_default_gateway` |
-| Spending is capped for every stage, and failed calls still count | `BudgetGuard`; usage is recorded for failed, refused and truncated calls. The coding agent writes to the same ledger, does not start when the day's budget is spent, and stops at the per-run cap or what is left of the day | `test_budgets_per_run_and_per_day`, `test_coding_agent_spending_is_recorded_and_counts_toward_the_daily_budget`, `test_an_exhausted_daily_budget_stops_the_execution_before_any_model_call`, `test_the_agent_may_only_spend_what_is_left_of_the_day`, `test_coding_agent_stops_when_the_cost_budget_is_spent` |
+| An audited repository cannot reconfigure the scanners that audit it | ruff runs `--isolated`; gitleaks gets the platform's config (`--config`); trivy runs from an empty directory, away from a committed `trivy.yaml` or `.trivyignore`; file names follow `--` | `test_file_names_are_never_read_as_scanner_options`, `test_scanner_configuration_in_the_checkout_is_not_used`, `test_real_gitleaks_ignores_an_allowlist_committed_to_the_repository` (real gitleaks), `test_real_trivy_ignores_a_config_committed_to_the_repository` (real trivy) |
+| Spending is capped for every stage, and failed calls still count | `BudgetGuard`; usage is recorded for failed, refused and truncated calls, including Claude's (checked with the real SDK). The coding agent writes to the same ledger, does not start when the day's budget is spent, and stops at the per-run cap or what is left of the day | `test_budgets_per_run_and_per_day`, `test_billed_failures_are_recorded_before_they_surface`, `test_coding_agent_spending_is_recorded_and_counts_toward_the_daily_budget`, `test_an_exhausted_daily_budget_stops_the_execution_before_any_model_call`, `test_the_agent_may_only_spend_what_is_left_of_the_day`, `test_coding_agent_stops_when_the_cost_budget_is_spent` |
 | The guarantees do not depend on the model provider | Every provider goes through the same gateway, and every coding agent through the same tool dispatcher and workspace | `test_acceptance_scenario_through_an_openai_compatible_endpoint`, `test_the_scenario_ends_the_same_whichever_provider_runs_it` |
 
 ### Access control
@@ -136,6 +137,10 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
   `redaction_extra_patterns` for your own formats.
 - **Admin-supplied regular expressions are trusted** (`redaction_extra_patterns`,
   `policy_rules`, file-connector `pattern`). A pathological pattern can stall a worker.
+- **Per-finding suppressions in the audited repository are honoured.** A `.gitleaksignore`
+  entry (one file, rule and line) or a `nosemgrep` comment hides that one finding from that
+  scanner, as their authors intend; gitleaks offers no way to turn the file off. Opsmith's own
+  secrets analyzer does not read them. Repository-wide scanner configuration is not used.
 - **The credential scan on diffs is the same pattern set.** It is a backstop, not a guarantee
   that an agent cannot write a secret.
 - **Your data goes to the model provider you configure.** Redaction removes recognizable

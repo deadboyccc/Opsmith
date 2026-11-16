@@ -13,9 +13,15 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, ClassVar
 
 from opsmith.audits.base import Analyzer, AnalyzerError, AuditContext, RawFinding, register
+
+# Scanners read configuration from the directory they run in or scan. The audited repository is
+# untrusted, so a scanner is given the platform's own configuration, or run from an empty
+# directory, whenever its configuration could change what is reported or where.
+GITLEAKS_CONFIG = Path(__file__).resolve().parent / "gitleaks.toml"
 
 _SEV = {
     "ERROR": "high",
@@ -82,6 +88,9 @@ class ExternalTool(Analyzer):
     # Every other status is a failure of the tool, never an empty result.
     clean_exit_codes: ClassVar[tuple[int, ...]] = (0,)
     findings_exit_code: ClassVar[int | None] = None
+    # False: run from an empty directory instead of the checkout, for tools that read
+    # configuration from the working directory (and take the checkout as an absolute path).
+    run_in_checkout: ClassVar[bool] = True
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -126,10 +135,16 @@ class ExternalTool(Analyzer):
         return _ordered(out)
 
     def _run(self, cmd: list[str], ctx: AuditContext) -> list[RawFinding]:
+        if self.run_in_checkout:
+            return self._run_in(cmd, ctx, ctx.repo_path)
+        with tempfile.TemporaryDirectory(prefix="opsmith-scan-") as neutral:
+            return self._run_in(cmd, ctx, Path(neutral))
+
+    def _run_in(self, cmd: list[str], ctx: AuditContext, cwd: Path) -> list[RawFinding]:
         try:
             proc = subprocess.run(
                 cmd,
-                cwd=ctx.repo_path,
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -189,7 +204,9 @@ class GitleaksTool(ExternalTool):
             "--report-format",
             "json",
             "--report-path",
-            "/dev/stdout",
+            "-",  # stdout; gitleaks 8.30 writes nothing to "/dev/stdout"
+            "--config",
+            str(GITLEAKS_CONFIG),
             "--source",
             ".",
         ]
@@ -205,9 +222,22 @@ class TrivyTool(ExternalTool):
     binary = "trivy"
     audit_types = ("security", "dependency", "compliance")
     # trivy exits 0 with or without findings; 1 is a fatal error (e.g. no vulnerability DB).
+    # trivy reads trivy.yaml and .trivyignore from its working directory; a trivy.yaml in the
+    # checkout could send the report to a file of its choosing and leave stdout empty.
+    run_in_checkout = False
 
     def command(self, ctx: AuditContext) -> list[str]:
-        return ["trivy", "fs", "--quiet", "--format", "json", "--scanners", "vuln,misconfig", "."]
+        target = str(Path(ctx.repo_path).resolve())
+        return [
+            "trivy",
+            "fs",
+            "--quiet",
+            "--format",
+            "json",
+            "--scanners",
+            "vuln,misconfig",
+            target,
+        ]
 
     def parse(self, output: str, ctx: AuditContext) -> list[RawFinding]:
         return parse_trivy(output)

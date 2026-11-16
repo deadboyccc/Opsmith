@@ -1,0 +1,5 @@
+# Opsmith's gitleaks configuration: gitleaks' own default rules, nothing else. It is passed
+# with --config so that a .gitleaks.toml committed to the audited repository cannot change
+# what is scanned (an allowlist of ".*" there would hide every leaked secret).
+[extend]
+useDefault = true

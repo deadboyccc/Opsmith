@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -345,6 +346,91 @@ def test_file_names_are_never_read_as_scanner_options(tmp_path: Path, monkeypatc
 
     for cmd in SemgrepTool().commands(ctx):
         assert cmd[cmd.index("--") + 1 :] == ["--output-file=/x/owned.py", "a.py"]
+
+
+def test_scanner_configuration_in_the_checkout_is_not_used(tmp_path: Path, monkeypatch) -> None:
+    """gitleaks gets the platform's config; trivy runs from an empty directory. A .gitleaks.toml
+    or trivy.yaml committed to the audited repository changes nothing."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("x = 1\n")
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    for name in ("gitleaks", "trivy"):
+        record = f'printf "%s\\n" "$@" > {calls}/{name}.argv\npwd > {calls}/{name}.cwd\n'
+        report = "[]" if name == "gitleaks" else "{}"
+        fake_tool(tmp_path, monkeypatch, name, record + f"echo '{report}'\n")
+
+    GitleaksTool().analyze(ctx_for(repo))
+    argv = (calls / "gitleaks.argv").read_text().splitlines()
+    config = Path(argv[argv.index("--config") + 1])
+    assert config == external.GITLEAKS_CONFIG
+    assert not config.is_relative_to(repo)
+    assert "useDefault = true" in config.read_text()
+
+    TrivyTool().analyze(ctx_for(repo))
+    cwd = Path((calls / "trivy.cwd").read_text().strip())
+    assert cwd != repo
+    assert not cwd.exists()  # an empty directory made for the run, removed afterwards
+    assert (calls / "trivy.argv").read_text().splitlines()[-1] == str(repo.resolve())
+
+
+GITLEAKS_IMAGE = "zricethezav/gitleaks:v8.30.1"
+TRIVY_IMAGE = "aquasec/trivy:0.76.2"
+SECRET_LINE = 'AWS_KEY = "AKIA' + 'QWERTYUIOPASDFGH"\n'  # assembled: no key-shaped literal
+
+
+def _docker_shim(tmp_path: Path, monkeypatch, name: str, image: str, *extra: str) -> None:
+    """Put ``name`` on PATH as the real scanner, in a container that sees the same paths."""
+    missing = (
+        shutil.which("docker") is None
+        or (
+            subprocess.run(["docker", "image", "inspect", image], capture_output=True, check=False)
+        ).returncode
+    )
+    if missing:
+        pytest.skip(f"docker or the {image} image is not available")
+    pkg = external.GITLEAKS_CONFIG.parent
+    mounts = f"-v /tmp:/tmp -v {tmp_path}:{tmp_path} -v {pkg}:{pkg}:ro"
+    command = f'exec docker run --rm {mounts} -w "$PWD" {" ".join(extra)} {image} "$@"\n'
+    fake_tool(tmp_path, monkeypatch, name, command)
+
+
+@pytest.mark.docker
+def test_real_gitleaks_ignores_an_allowlist_committed_to_the_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(SECRET_LINE)
+    allow_all = "[extend]\nuseDefault = true\n[allowlist]\npaths = ['''.*''']\n"
+    (repo / ".gitleaks.toml").write_text(allow_all)
+    _docker_shim(tmp_path, monkeypatch, "gitleaks", GITLEAKS_IMAGE)
+    findings = GitleaksTool().analyze(ctx_for(repo))
+    assert [(f.path, f.line) for f in findings] == [("app.py", 1)]
+
+
+@pytest.mark.docker
+def test_real_trivy_ignores_a_config_committed_to_the_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A trivy.yaml with `output:` used to send the report to a file of the repository's
+    choosing and leave stdout empty, which read as "no findings"."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(SECRET_LINE)
+    stolen = tmp_path / "stolen.json"
+    (repo / "trivy.yaml").write_text(f"output: {stolen}\n")
+    _docker_shim(tmp_path, monkeypatch, "trivy", TRIVY_IMAGE, "-e TRIVY_CACHE_DIR=/tmp/trivy")
+    reports: list[str] = []
+    monkeypatch.setattr(TrivyTool, "parse", lambda self, output, ctx: reports.append(output) or [])
+    tool, ctx = TrivyTool(), ctx_for(repo)
+    cmd = tool.command(ctx)
+    cmd[cmd.index("--scanners") + 1] = "secret"  # no vulnerability database download in tests
+    tool._run(cmd, ctx)
+    assert not stolen.exists()
+    assert len(reports) == 1  # the report reached the parser, not a file the repo chose
+    assert json.loads(reports[0])["Results"][0]["Target"] == "app.py"
 
 
 @pytest.mark.skipif(shutil.which("ruff") is None, reason="ruff is not installed")
