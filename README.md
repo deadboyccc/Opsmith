@@ -219,7 +219,8 @@ merged, verified-fix rate). That is the main open work; see the [changelog](CHAN
 
 ## Documentation
 
-The full index is in [docs/README.md](docs/README.md). The pages are split by reader.
+All of it is also published as a website, with search, at **<https://deadboyccc.github.io/Opsmith/>**. The full index is
+in [docs/README.md](docs/README.md). The pages are split by reader.
 
 **Using Opsmith**
 

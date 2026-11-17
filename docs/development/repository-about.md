@@ -11,10 +11,10 @@ Turns production logs, metrics and code audits into ranked engineering tasks. Af
 
 ## Website
 
-Optional. Leave it blank, or point it at the documentation index:
+The documentation site, published from `main` by `.github/workflows/docs.yml`:
 
 ```
-https://github.com/deadboyccc/Opsmith/blob/main/docs/README.md
+https://deadboyccc.github.io/Opsmith/
 ```
 
 ## Topics

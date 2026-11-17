@@ -120,6 +120,23 @@ environment variable, a project setting, an API endpoint, a notification event, 
 type, an analyzer, a task or lead state, a model provider, a coding agent, a CLI command or a
 job kind. So adding a setting or an endpoint without documenting it breaks the build.
 
+## The documentation site
+
+Every Markdown page in the repository is published at
+<https://deadboyccc.github.io/Opsmith/> by `.github/workflows/docs.yml`. It builds the site on
+every pull request and deploys it on every push to `main`. The build is strict: a broken link,
+heading anchor or page fails it. To build or preview it locally:
+
+```bash
+make site          # build/site, strict
+make site-serve    # http://127.0.0.1:8000 with live reload
+```
+
+`scripts/build_site.py` copies the pages into `build/site-src` with their layout unchanged,
+adjusts the copies for the web (see its docstring), adds the landing page and styles from
+`site/`, and runs MkDocs. A new page appears on the site once it is added to `nav` in
+`mkdocs.yml`; MkDocs reports a page that is missing from `nav`.
+
 ## Regenerating the UI screenshots
 
 The pictures in the [UI tour](../guide/ui-tour.md) come from the offline demo:

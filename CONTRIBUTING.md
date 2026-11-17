@@ -43,7 +43,9 @@ What reviewers look for:
 - **Docs move with the code.** Pages for people *using* Opsmith are under `docs/guide/`; pages
   for people *changing* it are under `docs/development/`. Update the one your change affects,
   `ARCHITECTURE_DECISIONS.md` for a design change, and add a line to `CHANGELOG.md`.
-  `make docs` checks every link.
+  `make docs` checks every link. The pages are also the
+  [documentation site](https://deadboyccc.github.io/Opsmith/); `make site` builds it, and a
+  new page needs an entry in `nav` in `mkdocs.yml`.
 
 ## Commits and pull requests
 

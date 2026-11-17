@@ -212,3 +212,67 @@ Every full run in this work (eight on SQLite, three on PostgreSQL) passed. Two t
 on real time. The heartbeat test's margin was widened (it allowed less than a second of
 delay before the lease lapsed); the process-group test can only err toward passing, so it was
 left as it is. Neither the suite nor CI retries failing tests.
+
+## Documentation site (1.3.0)
+
+### MkDocs with Material for MkDocs
+
+The site is built with [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
+9.8 and published to GitHub Pages from `main`.
+
+- **Why it fits:** the documentation is already plain Markdown written for GitHub, and the
+  project is Python managed by uv, so the site needs no Node toolchain and lives in a
+  dependency group (`docs`) that the application never installs. Material gives the
+  requirements without custom code: a responsive layout with a navigation drawer on phones,
+  built-in search, light and dark schemes that follow the system, a table of contents per
+  page, copy buttons on code blocks, Mermaid diagrams, and a strict build that fails on a
+  broken link or heading anchor.
+- **Not chosen:** Docusaurus and VitePress. Both are good, both need Node and a JavaScript
+  dependency tree to keep patched for a site that has no interactive pages, and both read
+  Markdown with their own extensions (MDX in Docusaurus) where these pages are plain
+  GitHub Markdown.
+- **Known horizon:** Material for MkDocs reaches end of life on 5 May 2027 (critical and
+  security fixes continue until then). Its maintained successor, Zensical, is by the same
+  team and reads `mkdocs.yml`, but it is at version 0.1 (0.1.1, November 2026). The
+  site uses no plugin beyond search, so moving to Zensical once it has matured should be a
+  configuration change; revisit before May 2027.
+
+### The pages are published from where they are
+
+Every Markdown file in the repository (README, the root guides, `docs/`, `reports/`) is
+published without being moved or edited. `scripts/build_site.py` copies them into
+`build/site-src` with their relative layout, so the links between them keep working on
+GitHub and on the site alike, and adjusts only the copies: the README becomes `overview.md`
+(the landing page is `index.md`), links to files that are not pages (`LICENSE`, scripts,
+example configurations) point at GitHub, and raw-HTML links get the extra `../` that
+MkDocs' directory URLs need. Headings use GitHub's anchor rules, so links written for GitHub
+resolve on the site. The changelog page is `CHANGELOG.md` itself, rebuilt on every push to
+`main`, so it cannot fall out of step.
+
+- **Not chosen:** moving the pages into a `docs_dir`. It would break every link written for
+  reading on GitHub, where most people meet the project.
+
+### Images: which one goes where
+
+The README references two brand images, both in `docs/images/brand/`:
+
+| Placement | Image | Why |
+|---|---|---|
+| Header logo | `mascot.svg` | A vector at any size, 6 KB, transparent, and legible at 28 px |
+| Favicon | `mascot.svg` | The same file; modern browsers take SVG favicons |
+| Landing page (hero) | `mascot.svg` above the headline, `social-preview.png` beside it | The mascot introduces the page; the preview carries the tagline as a picture |
+
+Neither file is altered. The 503 KB preview is served as WebP copies generated at build time
+(17 KB at 640 px wide, 42 KB at 1280 px), chosen by the browser through `srcset`, with the
+original PNG as the fallback. The mascot was checked on white and on the dark scheme's navy:
+its outline and colours hold on both, so it needs no per-scheme variant. The preview has its
+own dark background and a border on the light scheme.
+
+### How the site was verified
+
+A headless browser loaded all 28 pages served under `/Opsmith/` (the path GitHub Pages uses
+for this project) at 390 px and 1366 px wide, in light and dark mode. On every page: no
+sideways scrolling, every image loaded (lazy ones after scrolling to them), and the header
+logo and favicon present. Two defects were found and fixed this way: the README's raw-HTML
+images were broken under directory URLs, and both landing-page buttons were navy on navy in
+dark mode.

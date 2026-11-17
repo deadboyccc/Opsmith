@@ -1,6 +1,7 @@
 # Opsmith documentation
 
-Two sets of pages, for two kinds of reader.
+Two sets of pages, for two kinds of reader. They are also published, with search, as the
+documentation site at <https://deadboyccc.github.io/Opsmith/>.
 
 ## Using Opsmith
 

@@ -4,6 +4,19 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.3.0 - 2026-11-17
+
+### Added
+
+- **A documentation site** at <https://deadboyccc.github.io/Opsmith/>: every Markdown page in
+  the repository, grouped by reader, with search, light and dark mode, a table of contents on
+  each page and copy buttons on code. It has a landing page with a quick start and a reading
+  order, and works on phones. It is rebuilt from `main` on every push, so its
+  [changelog](CHANGELOG.md) is always this file. Pull requests build it strictly: a broken
+  link fails the build (`.github/workflows/docs.yml`).
+- `make site` builds the site and `make site-serve` previews it. The tools are in a
+  separate `docs` dependency group, not in the application's dependencies.
+
 ## 1.2.4 - 2026-11-17
 
 Documentation only. Every page was compared with the code as it now is.
