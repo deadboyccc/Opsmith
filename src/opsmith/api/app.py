@@ -84,20 +84,39 @@ class BodyLimit:
 
 
 def create_app(platform: Platform | None = None) -> FastAPI:
+    """The API and UI. With ``base_path`` set they are mounted under it, so a reverse proxy can
+    route one path of a shared domain (``/opsmith/...``) here without rewriting anything."""
+    platform = platform or Platform()
+    app = _application(platform)
+    base = platform.settings.base_path
+    if not base:
+        return app
+    outer = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    outer.state.platform = platform
+
+    @outer.get(base, include_in_schema=False)
+    def at_base() -> Response:
+        return RedirectResponse(f"{base}/ui", status_code=303)
+
+    outer.mount(base, app)
+    return outer
+
+
+def _application(platform: Platform) -> FastAPI:
     app = FastAPI(
         title="Opsmith",
         version=__version__,
         description="Autonomous engineering ops: observe, analyze, propose, human approve, "
         "execute, PR.",
     )
-    app.state.platform = platform or Platform()
+    app.state.platform = platform
     app.include_router(routes.router)
     app.include_router(ui.router)
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     @app.exception_handler(ui.LoginRequired)
-    def _login_required(_request: Request, _exc: ui.LoginRequired) -> Response:
-        return RedirectResponse("/ui/login", status_code=303)
+    def _login_required(request: Request, _exc: ui.LoginRequired) -> Response:
+        return RedirectResponse(ui.base_of(request) + "/ui/login", status_code=303)
 
     @app.exception_handler(IntegrityError)
     def _conflict(_request: Request, _exc: IntegrityError) -> Response:
@@ -105,8 +124,8 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         return JSONResponse({"detail": "conflict with an existing record"}, status_code=409)
 
     @app.get("/", include_in_schema=False)
-    def root() -> Response:
-        return RedirectResponse("/ui", status_code=303)
+    def root(request: Request) -> Response:
+        return RedirectResponse(ui.base_of(request) + "/ui", status_code=303)
 
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
@@ -128,7 +147,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
-        reference = request.url.path in API_REFERENCE_PATHS
+        reference = request.url.path.removeprefix(ui.base_of(request)) in API_REFERENCE_PATHS
         response.headers.setdefault(
             "Content-Security-Policy", API_REFERENCE_CSP if reference else STRICT_CSP
         )

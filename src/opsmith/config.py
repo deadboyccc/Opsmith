@@ -67,6 +67,19 @@ class Settings(BaseModel):
     # Public URL of the UI (e.g. https://opsmith.example.com). When set, pull requests link
     # back to their task instead of only naming its id.
     base_url: str = ""
+    # The path the API and UI are served under, behind a reverse proxy that routes one path of
+    # a shared domain to Opsmith (``/opsmith``). Empty: served at the root.
+    base_path: str = ""
+
+    @field_validator("base_path")
+    @classmethod
+    def _plain_path(cls, value: str) -> str:
+        """``/name`` or ``/a/b``: no trailing slash, no ``..``, nothing a URL treats specially."""
+        if value and (
+            not re.fullmatch(r"(?:/[A-Za-z0-9._~-]+)+", value) or ".." in value.split("/")
+        ):
+            raise ValueError("base_path must look like /opsmith (letters, digits, . _ ~ -)")
+        return value
 
     @property
     def object_store_dir(self) -> Path:
@@ -107,6 +120,7 @@ class Settings(BaseModel):
             bot_name=_env("BOT_NAME", "Opsmith Bot"),
             bot_email=_env("BOT_EMAIL", "opsmith-bot@users.noreply.github.com"),
             base_url=_env("BASE_URL", ""),
+            base_path=_env("BASE_PATH", ""),
         )
 
     def ensure_dirs(self) -> None:

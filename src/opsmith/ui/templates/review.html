@@ -8,7 +8,7 @@
 <tr><th>Priority</th><th>Task</th><th>Category</th><th>Confidence</th><th>Paths</th><th>Protection</th></tr>
 {% for t in tasks %}
 <tr><td><span class="chip">{{ t.priority }}</span> <span class="muted">{{ t.score }}</span></td>
-<td><a href="/ui/tasks/{{ t.id }}">{{ t.title }}</a></td><td>{{ t.category }}</td>
+<td><a href="{{ base }}/ui/tasks/{{ t.id }}">{{ t.title }}</a></td><td>{{ t.category }}</td>
 <td>{{ "%.2f"|format(t.confidence) }}</td><td>{{ t.paths|join(", ") }}</td>
 <td>{{ status(t.protection) if t.protection != "none" else "—" }}</td></tr>
 {% else %}<tr><td colspan="6" class="muted">The queue is empty.</td></tr>{% endfor %}

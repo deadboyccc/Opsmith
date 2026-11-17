@@ -5,24 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% block head %}{% endblock %}
   <title>{% block title %}Opsmith{% endblock %} · Opsmith</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ base }}/static/style.css">
 </head>
 <body>
 <header>
   <div class="bar">
-    <a class="brand" href="/ui">Opsmith</a>
+    <a class="brand" href="{{ base }}/ui">Opsmith</a>
     {% if user %}
     {% set pq = ("?project_id=" ~ project.id) if project else "" %}
     <nav>
-      <a href="/ui{{ pq }}">Dashboard</a>
-      <a href="/ui/review{{ pq }}">Review queue</a>
-      <a href="/ui/tasks{{ pq }}">Tasks</a>
-      <a href="/ui/leads{{ pq }}">Leads</a>
-      <a href="/ui/executions{{ pq }}">Executions</a>
-      <a href="/ui/config{{ pq }}">Configuration</a>
-      <a href="/ui/jobs">Jobs</a>
+      <a href="{{ base }}/ui{{ pq }}">Dashboard</a>
+      <a href="{{ base }}/ui/review{{ pq }}">Review queue</a>
+      <a href="{{ base }}/ui/tasks{{ pq }}">Tasks</a>
+      <a href="{{ base }}/ui/leads{{ pq }}">Leads</a>
+      <a href="{{ base }}/ui/executions{{ pq }}">Executions</a>
+      <a href="{{ base }}/ui/config{{ pq }}">Configuration</a>
+      <a href="{{ base }}/ui/jobs">Jobs</a>
     </nav>
-    <span class="who">{{ user.name }} · {{ user.role }} · <form class="inline" method="post" action="/ui/logout"><button class="linklike" type="submit">Sign out</button></form></span>
+    <span class="who">{{ user.name }} · {{ user.role }} · <form class="inline" method="post" action="{{ base }}/ui/logout"><button class="linklike" type="submit">Sign out</button></form></span>
     {% endif %}
   </div>
 </header>

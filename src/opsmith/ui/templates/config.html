@@ -20,7 +20,7 @@
 <h2>Project settings</h2>
 <p class="muted">Budgets, protected paths, audit schedule, LLM models per stage, provider allowlist, notification channels, policy-as-code rules.</p>
 {% if is_admin %}
-<form method="post" action="/ui/projects/{{ project.id }}/settings">
+<form method="post" action="{{ base }}/ui/projects/{{ project.id }}/settings">
 <textarea name="settings_json" class="tall">{{ settings_json }}</textarea>
 <p><button type="submit">Save settings</button></p></form>
 {% else %}<pre>{{ settings_json }}</pre>{% endif %}

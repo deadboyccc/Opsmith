@@ -21,7 +21,7 @@ Watch: {{ task.verification.get("metrics_to_watch", [])|join(", ") or "—" }}</
 
 {% if can_review and task.status == "in_review" %}
 <div class="card"><div class="label">Review</div>
-<form method="post" action="/ui/tasks/{{ task.id }}/review">
+<form method="post" action="{{ base }}/ui/tasks/{{ task.id }}/review">
   <input type="hidden" name="expected_version" value="{{ task.version }}">
   <p><label class="label">Decision</label>
   <select name="decision">

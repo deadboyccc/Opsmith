@@ -1,6 +1,7 @@
 """Regression tests for the server-rendered UI (and the demo that drives it): form-post origin
 checks, logout, error reporting, link rendering, and review-form round trips."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -304,3 +305,67 @@ def test_deeply_nested_settings_are_an_error_message_not_a_500(client, platform,
     )
     assert resp.status_code == 303
     assert "error=" in resp.headers["location"]
+
+
+# --------------------------------------------------------------------------- base path (1.4.0)
+
+
+@pytest.fixture
+def mounted(platform) -> TestClient:
+    """The application served under a path prefix, as behind a reverse proxy that routes
+    ``https://example.org/opsmith/...`` to it without stripping the prefix."""
+    platform.settings.base_path = "/opsmith"
+    return TestClient(create_app(platform))
+
+
+def test_every_page_link_and_redirect_stays_under_the_base_path(mounted, seed) -> None:
+    """Links, forms and redirects were absolute (``/ui/...``). Under a prefix they pointed at
+    whatever the proxy serves at the root of the domain."""
+    assert mounted.get("/ui/login").status_code == 404  # nothing outside the prefix
+    login_page = mounted.get("/opsmith/ui/login")
+    assert login_page.status_code == 200
+    assert 'href="/opsmith/static/style.css"' in login_page.text
+    assert mounted.get("/opsmith/static/style.css").status_code == 200
+    resp = mounted.post(
+        "/opsmith/ui/login", data={"api_key": seed.keys["admin"]}, follow_redirects=False
+    )
+    assert (resp.status_code, resp.headers["location"]) == (303, "/opsmith/ui")
+    cookie = resp.headers["set-cookie"].lower()
+    assert "path=/opsmith" in cookie  # never sent to the other sites on the same domain
+    for path in ("", "/review", "/tasks", "/leads", "/executions", "/config", "/jobs"):
+        page = mounted.get(f"/opsmith/ui{path}")
+        assert page.status_code == 200, path
+        hrefs = re.findall(r'(?:href|action|src)="(/[^"]*)"', page.text)
+        assert hrefs, path
+        assert all(h.startswith("/opsmith/") for h in hrefs), (path, hrefs)
+    signed_out = TestClient(mounted.app).get("/opsmith/ui", follow_redirects=False)
+    assert signed_out.headers["location"] == "/opsmith/ui/login"
+    assert mounted.get("/opsmith", follow_redirects=False).headers["location"] == "/opsmith/ui"
+    out = mounted.post("/opsmith/ui/logout", follow_redirects=False)
+    assert out.headers["location"] == "/opsmith/ui/login"
+    assert "path=/opsmith" in out.headers["set-cookie"].lower()
+
+
+def test_the_api_and_its_reference_work_under_the_base_path(mounted, seed) -> None:
+    me = mounted.get(
+        "/opsmith/api/v1/me", headers={"Authorization": f"Bearer {seed.keys['admin']}"}
+    )
+    assert (me.status_code, me.json()["role"]) == (200, "admin")
+    assert mounted.get("/opsmith/healthz").json()["status"] == "ok"
+    docs = mounted.get("/opsmith/docs")
+    assert docs.status_code == 200
+    assert "/opsmith/openapi.json" in docs.text
+    assert "cdn.jsdelivr.net" in docs.headers["content-security-policy"]
+    assert mounted.get("/opsmith/openapi.json").status_code == 200
+
+
+@pytest.mark.parametrize("value", ["opsmith", "/opsmith/", "/ops mith", "/../x", "/a?b", "//x"])
+def test_a_base_path_must_be_a_plain_path(value: str) -> None:
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    from opsmith.config import Settings  # noqa: PLC0415
+
+    with pytest.raises(ValidationError, match="base_path"):
+        Settings(base_path=value)
+    assert Settings(base_path="/tools/opsmith").base_path == "/tools/opsmith"
+    assert Settings(base_path="").base_path == ""

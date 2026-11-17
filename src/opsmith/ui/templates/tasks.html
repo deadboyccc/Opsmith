@@ -6,7 +6,7 @@
 <div class="table-wrap"><table>
 <tr><th>Status</th><th>Priority</th><th>Task</th><th>PR</th><th>CI</th><th>Updated</th></tr>
 {% for t in tasks %}
-<tr><td>{{ status(t.status) }}</td><td>{{ t.priority }}</td><td><a href="/ui/tasks/{{ t.id }}">{{ t.title }}</a></td>
+<tr><td>{{ status(t.status) }}</td><td>{{ t.priority }}</td><td><a href="{{ base }}/ui/tasks/{{ t.id }}">{{ t.title }}</a></td>
 <td>{% if t.pr_url %}{{ ext_link(t.pr_url, "#" ~ t.pr_number) }}{% else %}—{% endif %}</td>
 <td>{{ status(t.ci_status) if t.ci_status else "—" }}</td><td>{{ dt(t.updated_at) }}</td></tr>
 {% else %}<tr><td colspan="6" class="muted">No tasks.</td></tr>{% endfor %}

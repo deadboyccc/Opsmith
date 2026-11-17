@@ -96,8 +96,20 @@ def _form_text(value: str | None) -> str:
     return (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def base_of(request: Request) -> str:
+    """The path this application is mounted at (``/opsmith`` behind a proxy), or ``""``."""
+    return str(request.scope.get("root_path", "")).rstrip("/")
+
+
+def _to(request: Request, path: str, status_code: int = 303) -> RedirectResponse:
+    """A redirect to ``path`` (``/ui/...``) under the mount point."""
+    return RedirectResponse(base_of(request) + path, status_code=status_code)
+
+
 def _render(request: Request, name: str, user: User | None, **ctx: Any) -> HTMLResponse:
-    return TEMPLATES.TemplateResponse(request, name, {"user": user, **ctx})
+    return TEMPLATES.TemplateResponse(
+        request, name, {"user": user, "base": base_of(request), **ctx}
+    )
 
 
 def _projects(session: SessionDep, user: User) -> list[Project]:
@@ -127,8 +139,8 @@ def login(request: Request, session: SessionDep, api_key: Annotated[str, Form()]
     _check_origin(request)
     user = authenticate(session, api_key)
     if user is None or user.role not in HUMAN_ROLES:
-        return RedirectResponse("/ui/login?error=1", status_code=303)
-    resp = RedirectResponse("/ui", status_code=303)
+        return _to(request, "/ui/login?error=1")
+    resp = _to(request, "/ui")
     resp.set_cookie(
         COOKIE,
         api_key,
@@ -139,6 +151,7 @@ def login(request: Request, session: SessionDep, api_key: Annotated[str, Form()]
         secure=request.url.scheme == "https"
         or request.headers.get("origin", "").lower().startswith("https://"),
         max_age=12 * 3600,
+        path=base_of(request) or "/",  # only this application, not the whole domain
     )
     return resp
 
@@ -146,8 +159,8 @@ def login(request: Request, session: SessionDep, api_key: Annotated[str, Form()]
 @router.post("/logout")
 def logout(request: Request) -> Response:
     _check_origin(request)
-    resp = RedirectResponse("/ui/login", status_code=303)
-    resp.delete_cookie(COOKIE)
+    resp = _to(request, "/ui/login")
+    resp.delete_cookie(COOKIE, path=base_of(request) or "/")
     return resp
 
 
@@ -302,8 +315,8 @@ def task_review(
         platform.reviews.review(session, task, user, req)
     except (ReviewError, ValidationError) as exc:
         session.rollback()
-        return RedirectResponse(f"/ui/tasks/{task_id}?{_error_query(exc)}", status_code=303)
-    return RedirectResponse(f"/ui/tasks/{task_id}", status_code=303)
+        return _to(request, f"/ui/tasks/{task_id}?{_error_query(exc)}")
+    return _to(request, f"/ui/tasks/{task_id}")
 
 
 @router.get("/leads", response_class=HTMLResponse)
@@ -407,9 +420,7 @@ def save_settings(
     try:
         settings = ProjectSettings.model_validate(json.loads(settings_json))
     except (ValueError, ValidationError, RecursionError) as exc:  # nested too deep to parse
-        return RedirectResponse(
-            f"/ui/config?project_id={project_id}&{_error_query(exc)}", status_code=303
-        )
+        return _to(request, f"/ui/config?project_id={project_id}&{_error_query(exc)}")
     project.settings = settings.model_dump(mode="json")
     audit_log.record(
         session,
@@ -420,7 +431,7 @@ def save_settings(
         actor=Actor("user", user.id),
     )
     ensure_project_schedules(session, project)
-    return RedirectResponse(f"/ui/config?project_id={project_id}", status_code=303)
+    return _to(request, f"/ui/config?project_id={project_id}")
 
 
 @router.get("/jobs", response_class=HTMLResponse)
@@ -457,4 +468,4 @@ def jobs_retry(request: Request, job_id: str, session: SessionDep, user: UIUser)
             action="job.retried",
             actor=Actor("user", user.id),
         )
-    return RedirectResponse("/ui/jobs?status=dead", status_code=303)
+    return _to(request, "/ui/jobs?status=dead")
