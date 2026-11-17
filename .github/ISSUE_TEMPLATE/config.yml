@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Report a security problem privately
+  - name: Security policy
     url: https://github.com/deadboyccc/Opsmith/blob/main/SECURITY.md
-    about: Please do not report vulnerabilities in a public issue.
+    about: How security problems are reported and handled.
   - name: Documentation
     url: https://deadboyccc.github.io/Opsmith/
     about: Getting started, configuration, checks, the API and how it all works.

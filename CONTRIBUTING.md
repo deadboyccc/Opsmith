@@ -60,6 +60,6 @@ What reviewers look for:
 ## Reporting problems
 
 - Bugs and ideas: open an issue with what you did, what happened and what you expected.
-- Security problems: do not open a public issue. See [SECURITY.md](SECURITY.md).
+- Security problems: open an issue with the *Security problem* form. See [SECURITY.md](SECURITY.md).
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

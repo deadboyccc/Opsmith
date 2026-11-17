@@ -2,15 +2,16 @@
 
 ## Reporting a vulnerability
 
-Please report a security problem privately, not in a public issue, so that it can be fixed
-before it is known:
+Please open an issue with the **Security problem** form: *Issues*, *New issue*, *Security
+problem*. Security problems are handled in the open, like any other bug, so that everyone who
+runs Opsmith can see what is known and when it is fixed.
 
-- through GitHub's private vulnerability reporting: the **Security** tab of this repository,
-  then **Report a vulnerability**; or
-- by email to the maintainer listed in [`pyproject.toml`](pyproject.toml).
+If you would rather not post the details publicly, email the maintainer listed in
+[`pyproject.toml`](pyproject.toml) instead.
 
-Include what you did, what happened and what you expected. You will get an acknowledgement,
-and credit in the [changelog](CHANGELOG.md) if you want it.
+Include what you did, what happened and what you expected, and leave out secrets, tokens and
+real data. You will get an acknowledgement, and credit in the [changelog](CHANGELOG.md) if
+you want it.
 
 ## Supported versions
 

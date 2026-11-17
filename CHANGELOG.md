@@ -6,6 +6,13 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Changed
+
+- **Security problems are reported in the open,** with a new *Security problem* issue form,
+  like any other bug, so that everyone who runs Opsmith can see what is known and when it is
+  fixed. Email to the maintainer remains for anyone who would rather not post details
+  publicly. `SECURITY.md`, the security guide, `CONTRIBUTING.md` and the bug form say so.
+
 ## 1.5.2 - 2026-11-17
 
 ### Fixed

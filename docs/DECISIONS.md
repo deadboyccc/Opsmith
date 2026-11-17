@@ -487,3 +487,15 @@ It now lists the steps most often skipped, with their rule numbers, and what is 
 Claude Code: task lists, subagents, long runs, tokens and the Claude API patterns with their
 reasons. Not chosen: moving the Claude API reasons into `AGENTS.md` (they matter only to
 whoever edits that code, and `AGENTS.md` carries the rules themselves).
+
+## Security reports are public (1.5.3)
+
+The maintainer chose to handle security problems in the open, as issues, replacing the
+private route recorded for 1.5.2. The reasoning: Opsmith is self-hosted and young, its users
+are its contributors, and an open record shows everyone what is known and when it is fixed.
+The cost is that a reported weakness is known before its fix ships, so the form asks for the
+smallest reproduction and no secrets or attacks on systems the reporter does not own, and
+email to the maintainer stays as an option for anyone who would rather not post details.
+Not chosen: GitHub's private vulnerability reporting, which also needs an admin to switch it
+on. Security reports use the `bug` label and a `[security]` title, because the token used
+for this change could not create a `security` label; a maintainer can add one later.

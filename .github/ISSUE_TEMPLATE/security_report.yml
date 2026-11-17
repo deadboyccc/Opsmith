@@ -1,0 +1,49 @@
+name: Security problem
+description: A weakness someone could use to get around one of Opsmith's guarantees.
+title: "[security] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for looking at Opsmith's security. Security problems are reported in the open here, like any other bug. If you would rather not post the details publicly, email the maintainer listed in [`pyproject.toml`](https://github.com/deadboyccc/Opsmith/blob/main/pyproject.toml) instead.
+
+        [The security guide](https://deadboyccc.github.io/Opsmith/docs/guide/security/) lists what Opsmith guarantees and what it does not protect against. Please do not include secrets, tokens, real customer data, or an attack on a system you do not own.
+  - type: textarea
+    id: weakness
+    attributes:
+      label: The weakness
+      description: What can someone do that they should not be able to, and which guarantee does it break?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest setup, configuration and input that show it. A test, if you have one, is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who could use it, what they would need (a tenant admin's key, a repository you audit, log lines you control), and what they would gain.
+  - type: input
+    id: version
+    attributes:
+      label: Opsmith version
+      description: The output of `opsmith --version`.
+      placeholder: opsmith 1.5.2
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: A possible fix
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens and personal data from everything above.
+          required: true

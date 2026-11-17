@@ -7,7 +7,7 @@ body:
       value: |
         Thank you for taking the time to report this.
 
-        **A security problem?** Please do not report it here. See [SECURITY.md](https://github.com/deadboyccc/Opsmith/blob/main/SECURITY.md) for how to report it privately.
+        **A security problem?** Please use the *Security problem* form instead, so it gets the details it needs.
 
         Before you paste logs or configuration, remove secrets, tokens and personal data.
   - type: textarea

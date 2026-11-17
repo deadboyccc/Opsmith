@@ -199,7 +199,8 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a security problem. Use GitHub's private vulnerability
-reporting on this repository (*Security* tab, *Report a vulnerability*) or email the maintainer
-listed in `pyproject.toml`. Include what you did, what happened and what you expected. You will
-get an acknowledgement, and credit in the changelog if you want it.
+Open an issue with the **Security problem** form (*Issues*, *New issue*, *Security problem*).
+Security problems are handled in the open, like any other bug. If you would rather not post
+the details publicly, email the maintainer listed in `pyproject.toml` instead. Include what
+you did, what happened and what you expected, and leave out secrets, tokens and real data.
+You will get an acknowledgement, and credit in the changelog if you want it.
