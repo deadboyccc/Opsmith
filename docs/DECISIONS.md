@@ -408,3 +408,44 @@ or agent. The cost is many patch releases; the benefit is that an operator can a
 the version that contains a fix, and that the published site never trails `main`. Not
 adopted: batching changes into periodic releases, which leaves fixes on `main` that no
 version contains.
+
+## Checks (1.5.0)
+
+### What a check is
+
+Before Opsmith, the maintainer ran reviews by hand: a scheduled job, a prompt such as "find
+security weaknesses in this code", and the answers turned into work by hand. Checks make that
+a first-class source of findings: an instruction, the files it covers, and a cron. The model's
+answer goes through the same path as every other finding (aggregation, review, the sandboxed
+agent), so a check adds a way to find problems and no new way to change code.
+
+### Chosen
+
+- **Code only.** A check reads files of a repository. Logs and metrics already have their own
+  scheduled analysis, and adding them here would double the ways a model reads them.
+- **The instruction is trusted text, the code is data.** The instruction is written by a
+  tenant admin, who is trusted with the worker already (ADR-018), so it is sent as an
+  instruction, in its own block outside `<untrusted_data>`. It is still redacted, and it
+  cannot close its block early.
+- **A finding must quote its file.** Model output is untrusted (invariant 5). Each finding
+  must copy one to five lines of the file it names; the quote is looked up in the file as the
+  model saw it (numbered, then redacted), and that location, not the model's line number, is
+  stored. A quote that is not there drops the finding. This is the check's version of
+  "drop unknown ids and fabricated evidence".
+- **Runs are audit runs.** A run is an `AuditRun` with mode `check`: it reads a checkout of a
+  repository, shares the audit's checkout and lock, and is frozen when finished like any
+  audit run. No schema change, and its findings resolve in provenance like audit findings.
+  It never moves the base commit of incremental audits.
+- **Failures are visible.** The offline rules cannot follow an instruction, so the stage says
+  so (`analyzed: false`) and the run is `skipped` with the reason and a `check.failed`
+  notification, instead of an empty success. A failed model call ends the run as `failed`
+  without retrying the job, as analysis runs do, so the usage of billed calls is kept.
+
+### Not chosen
+
+- **Changed files only, like incremental audits.** A check's instruction can concern the
+  whole of its scope (an authorization review needs every route), and its scope is already
+  bounded by `paths`, `max_files` and `max_chars`.
+- **Trusting the model's line numbers.** Models count lines poorly; the quote is the evidence.
+- **A separate run table.** It would need a migration, its own immutability guard and its own
+  API, for the same columns `AuditRun` has.

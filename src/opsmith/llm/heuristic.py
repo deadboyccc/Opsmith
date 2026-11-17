@@ -56,6 +56,7 @@ class HeuristicProvider:
         handler = {
             "inference.analyze": self._inference,
             "audit.triage": self._triage,
+            "check.run": self._check,
             "task.draft": self._task_draft,
         }.get(request.prompt_id)
         if handler is None:
@@ -319,6 +320,20 @@ class HeuristicProvider:
                 }
             )
         return {"decisions": decisions}
+
+    # ------------------------------------------------------------------ checks
+    @staticmethod
+    def _check(_v: dict[str, Any]) -> dict[str, Any]:
+        """A check is an instruction in plain words, which rules cannot follow. Say so, so the
+        run is recorded as skipped with this reason instead of as a clean result."""
+        return {
+            "analyzed": False,
+            "findings": [],
+            "notes": [
+                "The offline rule-based provider cannot follow a written instruction, so "
+                "nothing was checked. Choose a model for the `check` stage (llm.stages.check)."
+            ],
+        }
 
     # ------------------------------------------------------------------ task drafting
     def _task_draft(self, v: dict[str, Any]) -> dict[str, Any]:

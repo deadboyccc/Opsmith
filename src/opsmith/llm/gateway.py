@@ -136,7 +136,14 @@ class LLMGateway:
         variables: dict[str, Any],
         schema: type[T],
         run_id: str | None = None,
+        instruction: str | None = None,
     ) -> LLMResult[T]:
+        """Call the stage's model and validate its answer against ``schema``.
+
+        ``instruction`` is text a project administrator wrote for the stage (a check's
+        instruction). It is placed outside the untrusted data (see ``Prompt.render``) and is
+        redacted like everything else that leaves.
+        """
         settings = ProjectSettings.model_validate(project.settings)
         cfg = settings.llm.for_stage(stage)
         if cfg.provider not in self.allowed(settings) or cfg.provider not in self.providers:
@@ -145,9 +152,11 @@ class LLMGateway:
             )
         provider = self.providers[cfg.provider]
         # Defence in depth: ETL already redacted, but nothing leaves unredacted.
-        safe_vars = self.redactor(settings).redact(variables)
+        redactor = self.redactor(settings)
+        safe_vars = redactor.redact(variables)
+        safe_instruction = None if instruction is None else redactor.redact(instruction)
         prompt = get_prompt(prompt_id)
-        system, user = prompt.render(safe_vars)
+        system, user = prompt.render(safe_vars, safe_instruction)
         guard = BudgetGuard(session, project)
 
         def worst_case_tokens(user_text: str) -> int:

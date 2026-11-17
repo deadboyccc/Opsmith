@@ -19,12 +19,13 @@ a provider available, and how a project picks models for each stage.
 | `openai` | **Any OpenAI-compatible endpoint:** OpenAI, Azure OpenAI, Ollama, vLLM, LM Studio, llama.cpp, LiteLLM, OpenRouter, Groq, Mistral, Together and others | You have such an endpoint, hosted or local |
 | `anthropic` | Claude, through the official SDK | You use Claude |
 
-Models are used in four places, called **stages**:
+Models are used in five places, called **stages**:
 
 | Stage | What the model does there |
 |---|---|
 | `inference` | Reads log and metric bundles plus open leads; reports findings and lead updates |
 | `audit_triage` | Filters false positives out of audit findings and calibrates confidence |
+| `check` | Carries out a [check](checks.md): reads the files in its scope with your instruction, and reports problems that quote the code. The offline rules cannot do this; a check needs a model |
 | `task` | Drafts the task a human will review: title, problem, approach, acceptance criteria |
 | `executor` | The coding agent: edits files and runs the checks for an approved task |
 

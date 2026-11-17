@@ -7,7 +7,7 @@ import fcntl
 import logging
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,25 @@ from opsmith.scm import SCMRegistry
 log = logging.getLogger(__name__)
 TRIAGE_BATCH = 40
 _STRENGTH = {True: 1.0, False: 0.6}  # deterministic tool vs LLM-only evidence
+
+
+@contextmanager
+def checkout_lock(workdir: Path, repository_id: str) -> Iterator[None]:
+    """Hold the repository's checkout for one audit or check. A second run that starts
+    meanwhile (a manual trigger during a scheduled run) would fetch, reset and clean the tree
+    the first is still reading; it is deferred instead. The lock is an advisory file lock, so
+    it also holds between worker processes that share the data directory, and the kernel
+    drops it if the worker dies."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(workdir / f"{repository_id}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise queue.RetryLater(60, "another audit of this repository is running") from None
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
 
 
 class AuditRunner:
@@ -209,23 +228,8 @@ class AuditRunner:
         )
         return run
 
-    @contextmanager
-    def _checkout_lock(self, repository_id: str) -> Iterator[None]:
-        """Hold the repository's checkout for one audit. A second audit that starts meanwhile
-        (a manual trigger during a scheduled run) would fetch, reset and clean the tree the
-        first is still reading; it is deferred instead. The lock is an advisory file lock, so
-        it also holds between worker processes that share the data directory, and the kernel
-        drops it if the worker dies."""
-        self.workdir.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.workdir / f"{repository_id}.lock", os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise queue.RetryLater(60, "another audit of this repository is running") from None
-            yield
-        finally:
-            os.close(fd)  # closing the descriptor releases the lock
+    def _checkout_lock(self, repository_id: str) -> AbstractContextManager[None]:
+        return checkout_lock(self.workdir, repository_id)
 
     @staticmethod
     def _resolve_mode(

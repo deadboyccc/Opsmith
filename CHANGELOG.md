@@ -6,6 +6,19 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Added
+
+- **Checks: your own reviews, on a schedule.** A check is an instruction in plain words
+  ("review this code for missing authorization checks"), with the files it covers and a cron.
+  A model carries it out, and each problem it reports becomes a finding and then a task for
+  review, like any other. Use them for a nightly bug hunt, a monthly hardening pass or a
+  weekly security review. A finding is kept only if it quotes the file it names; the
+  instruction is sent outside the data, redacted; excluded paths, binaries and symbolic links
+  are never read; and every run is bounded by files, characters, findings and the budgets.
+  Checks need a model: without one, a run is recorded as skipped, with the reason. Admins can
+  run a check now with `POST /projects/{id}/trigger` (`"job": "check"`). See
+  [Checks](docs/guide/checks.md).
+
 ## 1.4.3 - 2026-11-17
 
 ### Changed

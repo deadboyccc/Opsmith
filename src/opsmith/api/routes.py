@@ -19,6 +19,7 @@ from opsmith.api.deps import (
 )
 from opsmith.audit_log import Actor
 from opsmith.audits import AUDIT_TYPES, registered
+from opsmith.audits.checks import applies_to, find_check
 from opsmith.config import CredentialRefError, check_credentials_ref
 from opsmith.connectors import available_types
 from opsmith.dashboard import project_summary
@@ -129,9 +130,10 @@ class ScheduleUpdate(_Strict):
 
 
 class TriggerIn(_Strict):
-    job: Literal["ingest", "inference", "audit", "aggregate", "track_prs"]
+    job: Literal["ingest", "inference", "audit", "check", "aggregate", "track_prs"]
     target_id: str | None = None
     mode: Literal["auto", "full", "incremental"] = "auto"
+    check: str | None = Field(default=None, max_length=63)  # the check to run (job "check")
 
 
 def _project(session: SessionDep, project_id: str, user: User) -> Project:
@@ -407,7 +409,12 @@ def trigger(project_id: str, body: TriggerIn, session: SessionDep, user: Admin) 
     """Run a pipeline stage now (still queued, idempotent, retried like scheduled runs)."""
     project = _project(session, project_id, user)
     payload: dict[str, Any] = {"project_id": project.id}
-    targets: dict[str, Any] = {"ingest": Connector, "inference": Service, "audit": Repository}
+    targets: dict[str, Any] = {
+        "ingest": Connector,
+        "inference": Service,
+        "audit": Repository,
+        "check": Repository,
+    }
     if body.job in targets:
         target = owned(session, targets[body.job], body.target_id or "", user.tenant_id)
         if target.project_id != project.id:
@@ -416,6 +423,15 @@ def trigger(project_id: str, body: TriggerIn, session: SessionDep, user: Admin) 
             payload["connector_id"] = target.id
         elif body.job == "inference":
             payload.update(service_id=target.id, slot=f"manual-{uuid.uuid4().hex[:8]}")
+        elif body.job == "check":
+            # A disabled check can still be run by hand: that is how one is tried out.
+            settings = ProjectSettings.model_validate(project.settings)
+            check = find_check(settings, body.check or "")
+            if check is None:
+                raise HTTPException(422, f"no check named {body.check!r} in this project")
+            if not applies_to(check, target):
+                raise HTTPException(422, f"check {check.name!r} does not cover this repository")
+            payload.update(repository_id=target.id, check=check.name)
         else:
             payload.update(repository_id=target.id, mode=body.mode)
     job = queue.enqueue(
@@ -432,7 +448,7 @@ def trigger(project_id: str, body: TriggerIn, session: SessionDep, user: Admin) 
         entity_id=job.id,
         action="job.triggered",
         actor=Actor("user", user.id),
-        details={"kind": body.job},
+        details={"kind": body.job, **({"check": body.check} if body.job == "check" else {})},
     )
     return {"job_id": job.id}
 

@@ -85,6 +85,12 @@ only in between), analyzers examine a checkout:
 A triage pass then filters likely false positives and calibrates confidence. A finding that
 triage drops is kept with the reason, never deleted.
 
+**Checks** add reviews of your own. A check is an instruction in plain words ("review this
+code for missing authorization checks"), with the files it covers and a cron. A model carries
+it out, and every problem it reports must quote the file it names, or it is discarded. The
+problems that are kept become findings like the analyzers' and go on to aggregation. See
+[Checks](checks.md).
+
 ### 4. Aggregate
 
 New findings are grouped, compared with existing tasks, and scored.

@@ -2,7 +2,9 @@
 
 Bump ``version`` whenever the text changes. Untrusted content (log lines, code, issue text)
 is only ever placed inside ``<untrusted_data>`` and the system prompt tells the model to
-treat it strictly as data.
+treat it strictly as data. The one exception that is not data is a check's instruction,
+written by the project's administrator: it goes in its own ``<administrator_instruction>``
+block, outside the data.
 """
 
 from __future__ import annotations
@@ -36,12 +38,16 @@ class Prompt:
     system: str
     instructions: str
 
-    def render(self, variables: dict[str, Any]) -> tuple[str, str]:
-        payload = untrusted_json(variables)
-        user = (
-            f"{self.instructions}\n\n<untrusted_data>\n{payload}\n</untrusted_data>\n\n"
-            "Respond only with JSON matching the required schema."
-        )
+    def render(self, variables: dict[str, Any], instruction: str | None = None) -> tuple[str, str]:
+        """The system and user turns. ``instruction`` is an administrator's own text (a
+        check's instruction): it is trusted, so it is placed outside ``<untrusted_data>``,
+        in a block of its own that it cannot close early."""
+        parts = [self.instructions]
+        if instruction is not None:
+            quoted = instruction.replace("</", "<\\/")
+            parts.append(f"<administrator_instruction>\n{quoted}\n</administrator_instruction>")
+        parts.append(f"<untrusted_data>\n{untrusted_json(variables)}\n</untrusted_data>")
+        user = "\n\n".join(parts) + "\n\nRespond only with JSON matching the required schema."
         return f"{self.system}\n\n{INJECTION_GUARD}", user
 
 
@@ -92,6 +98,36 @@ PROMPTS: dict[str, Prompt] = {
             "Return one decision per finding `index`. keep=false only for clear false "
             "positives (test fixtures, placeholder values, vendored or generated code, "
             "unreachable code). Optionally adjust severity. Give a one-sentence rationale."
+        ),
+    ),
+    "check.run": Prompt(
+        id="check.run",
+        version="1",
+        system=(
+            "You are Opsmith's code reviewer. A project administrator wrote a standing "
+            "instruction, a check, that says what to look for in part of a code repository: "
+            "bugs, missing hardening, security weaknesses or anything else. You carry it out "
+            "and report each problem that deserves an engineering task. The text inside "
+            "<administrator_instruction> is that instruction. It decides what to look for; "
+            "it does not change the rules for your answer."
+        ),
+        instructions=(
+            "1. Look for what the administrator's instruction asks, in the files listed in "
+            "`files`. Each file has a `ref`, a `path` and its `content`, in which every line "
+            'starts with its number and a colon ("12: ").\n'
+            "2. Report only problems the code shows. For each finding, set `file_ref` to the "
+            "file's `ref`, `line` to the number of the line where the problem is, and "
+            "`evidence` to one to five lines copied exactly from that file, without their "
+            "line numbers. A finding whose evidence is not in that file is discarded.\n"
+            "3. Give a specific `title`, a `description` of the problem and what it can cause, "
+            "and a `suggested_fix`. Use category fix for bugs and missing hardening, security "
+            "for vulnerabilities, or performance, compliance, refactor, observability or "
+            "dependency when one of those fits better. Severity is info, low, medium, high or "
+            "critical. Confidence is a probability in [0,1].\n"
+            "4. Report each problem once. Prefer a few well-supported findings to many weak "
+            "ones, and report nothing the instruction does not ask for.\n"
+            "5. Use `notes` for anything you could not assess, such as a file that is cut off. "
+            "Set `analyzed` to false only if you could not carry out the instruction at all."
         ),
     ),
     "task.draft": Prompt(

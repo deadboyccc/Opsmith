@@ -78,7 +78,8 @@ flowchart LR
 | `build_bundles` | `etl.pipeline.BundleBuilder.build_for_project` | ingest, push |
 | `inference` | `inference.orchestrator.InferenceOrchestrator.run` | scheduler, manual trigger |
 | `audit` | `audits.runner.AuditRunner.run` | scheduler, manual trigger |
-| `aggregate` | `aggregation.aggregator.Aggregator.run` | inference, audit |
+| `check` | `audits.checks.CheckRunner.run` | scheduler, manual trigger |
+| `aggregate` | `aggregation.aggregator.Aggregator.run` | inference, audit, check |
 | `execute` | `executor.service.ExecutionService.execute` | an approving review |
 | `track_prs` | `tracking.PRTracker.run` | scheduler |
 | `verify` | `tracking.Verifier.run` | PR tracking, after a merge |
@@ -135,7 +136,7 @@ Nothing in the pipeline talks to a model vendor directly.
 
 ```mermaid
 flowchart LR
-    ST["a stage<br/>(inference, triage, task)"] --> GW["LLMGateway.structured"]
+    ST["a stage<br/>(inference, triage, check, task)"] --> GW["LLMGateway.structured"]
     GW --> A1["allowlist<br/>process ∩ project"]
     GW --> A2["redact variables"]
     GW --> A3["render versioned prompt<br/>(untrusted data framed)"]

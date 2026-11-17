@@ -94,7 +94,7 @@ Paths are relative to `/api/v1`. "Read" means `viewer`, `reviewer` or `admin`.
 | `POST /projects/{id}/connectors` | admin | Add a connector |
 | `GET /projects/{id}/repositories` · `/services` · `/connectors` · `/schedules` | read | List them |
 | `PATCH /schedules/{id}` | admin | Enable or disable a schedule, or set its timing (`cron` **or** `interval_seconds`). Timing set here is kept when settings change later |
-| `POST /projects/{id}/trigger` | admin | Run a stage now: `{"job": "ingest" \| "inference" \| "audit" \| "aggregate" \| "track_prs", "target_id": "...", "mode": "auto" \| "full" \| "incremental"}`. `target_id` is the connector, service or repository for the first three |
+| `POST /projects/{id}/trigger` | admin | Run a stage now: `{"job": "ingest" \| "inference" \| "audit" \| "check" \| "aggregate" \| "track_prs", "target_id": "...", "mode": "auto" \| "full" \| "incremental", "check": "..."}`. `target_id` is the connector, service or repository for the first four; `check` names the [check](checks.md) to run, which may be disabled |
 
 ### Pipeline state
 

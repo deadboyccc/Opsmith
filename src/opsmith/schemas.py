@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -204,6 +204,80 @@ class LLMSettings(BaseModel):
         return self.stages.get(stage, self.default)
 
 
+# A check's limits. They bound what one run reads and sends to a model, and how many findings
+# it may add: a check is configured by a tenant admin and runs on a shared worker.
+MAX_CHECKS = 50
+MAX_CHECK_INSTRUCTION_CHARS = 4_000
+MAX_CHECK_LIST = 50
+MAX_GLOB_CHARS = 200
+CHECK_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
+
+
+def _repository_glob(value: str) -> str:
+    """A glob relative to the repository root, as protected paths are written."""
+    from opsmith.protection import normalize_pattern  # noqa: PLC0415 - imports this module
+
+    normalized = normalize_pattern(value)
+    if (
+        not normalized
+        or len(value) > MAX_GLOB_CHARS
+        or "\x00" in normalized
+        or ".." in normalized.split("/")
+    ):
+        raise ValueError(
+            f"{value!r} is not a glob relative to the repository root, "
+            "for example 'src/**' or '**/*.py'"
+        )
+    return value
+
+
+class Check(BaseModel):
+    """A standing instruction, run against the code of a project's repositories on a schedule.
+
+    The instruction says what to look for (bugs, missing hardening, security weaknesses). A
+    model reads the files in scope and reports problems; each must quote the file it is about,
+    and becomes a finding, which the aggregator turns into a task for human review.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=CHECK_NAME_PATTERN)
+    instructions: str = Field(min_length=1, max_length=MAX_CHECK_INSTRUCTION_CHARS)
+    cron: str = Field(default="0 3 * * *", max_length=MAX_CRON_CHARS)
+    enabled: bool = True
+    category: Category | None = None  # set: every finding of the check takes this category
+    repositories: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=MAX_CHECK_LIST
+    )  # repository names; empty means every repository of the project
+    paths: list[str] = Field(
+        default_factory=lambda: ["**"], min_length=1, max_length=MAX_CHECK_LIST
+    )
+    exclude: list[str] = Field(default_factory=list, max_length=MAX_CHECK_LIST)
+    max_files: int = Field(default=200, ge=1, le=2_000)
+    max_chars: int = Field(default=400_000, ge=1_000, le=4_000_000)
+    max_findings: int = Field(default=20, ge=1, le=200)
+
+    @field_validator("instructions")
+    @classmethod
+    def _written(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("a check needs instructions: what to look for")
+        return value
+
+    @field_validator("cron")
+    @classmethod
+    def _cron(cls, value: str) -> str:
+        from opsmith.scheduler import CronExpr  # noqa: PLC0415 - scheduler imports this module
+
+        CronExpr.parse(value)
+        return value
+
+    @field_validator("paths", "exclude")
+    @classmethod
+    def _globs(cls, value: list[str]) -> list[str]:
+        return [_repository_glob(pattern) for pattern in value]
+
+
 class PolicyRule(BaseModel):
     """Policy-as-code rule evaluated by the compliance analyzer."""
 
@@ -273,6 +347,15 @@ class ProjectSettings(BaseModel):
         default_factory=lambda: [NotificationChannel(type="log")]
     )
     redaction_extra_patterns: list[str] = Field(default_factory=list)
+    checks: list[Check] = Field(default_factory=list, max_length=MAX_CHECKS)
+
+    @field_validator("checks")
+    @classmethod
+    def _unique_checks(cls, value: list[Check]) -> list[Check]:
+        names = [check.name for check in value]
+        if len(names) != len(set(names)):
+            raise ValueError("check names must be unique within a project")
+        return value
 
     @field_validator("audit_cron")
     @classmethod
@@ -400,6 +483,36 @@ class TriageDecision(BaseModel):
 
 class TriageOutput(StageOutput):
     decisions: list[TriageDecision] = Field(default_factory=list)
+
+
+class CheckFinding(BaseModel):
+    """One problem a check reports. ``evidence`` must be copied from the file ``file_ref``
+    names; the runner discards a finding whose evidence is not there."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(max_length=300)
+    description: str
+    category: Category
+    severity: Severity
+    confidence: float = Field(ge=0.0, le=1.0)
+    file_ref: str
+    line: int | None = None
+    evidence: str
+    suggested_fix: str = ""
+
+    @field_validator("line")
+    @classmethod
+    def _plausible_line(cls, value: int | None) -> int | None:
+        return value if value is not None and 1 <= value <= MAX_SOURCE_LINE else None
+
+
+class CheckOutput(StageOutput):
+    # False when the instruction could not be carried out at all (the offline rules cannot
+    # follow one); the run is then recorded as skipped, with ``notes`` as the reason.
+    analyzed: bool = True
+    findings: list[CheckFinding] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class TaskDraft(StageOutput):

@@ -181,7 +181,9 @@ def undocumented() -> tuple[list[str], dict[str, int]]:
     # Notification events, connector types, audit types, analyzers.
     notified = set()
     for block in source.split("notifications.notify(")[1:] + source.split("\n    notify(")[1:]:
-        notified |= set(re.findall(r'"((?:task|lead|job|budget|inference)\.[a-z_]+)"', block[:400]))
+        notified |= set(
+            re.findall(r'"((?:task|lead|job|budget|inference|check)\.[a-z_]+)"', block[:400])
+        )
     require(notified, "notification event", "docs/guide/configuration.md")
     require(set(available_types()), "connector type", "docs/guide/configuration.md")
     require(set(AUDIT_TYPES), "audit type", "docs/guide/configuration.md")

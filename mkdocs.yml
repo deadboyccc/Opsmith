@@ -113,6 +113,7 @@ nav:
       - Concepts: docs/guide/concepts.md
   - Guide:
       - Configuration: docs/guide/configuration.md
+      - Checks: docs/guide/checks.md
       - Models: docs/guide/models.md
       - Deployment: docs/guide/deployment.md
       - Operations: docs/guide/operations.md

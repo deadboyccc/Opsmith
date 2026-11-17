@@ -338,6 +338,24 @@ calls) are preserved by every decision below.
 - **Alternatives.** Per-tenant credential namespaces and an egress allowlist. Both are the
   right design for hostile multi-tenancy and more than the MVP needs.
 
+## ADR-019 Checks: administrator-written instructions as a source of findings
+
+- **Decision.** A project may define checks: an instruction in plain words, the repository
+  files it covers, and a cron (`ProjectSettings.checks`). A run (`audits.checks.CheckRunner`,
+  job kind `check`, model stage `check`, prompt `check.run`) sends the files in scope and the
+  instruction to the model through `LLMGateway.structured`, and stores what it reports as
+  findings under an `AuditRun` of mode `check`. Aggregation, review and execution are
+  unchanged: a check adds findings, never a way to change code.
+- **Trust.** The instruction is an admin's text and is sent as an instruction, in an
+  `<administrator_instruction>` block outside `<untrusted_data>`, redacted and unable to close
+  its block. Code stays data. A finding is kept only if it quotes the file it names, as the
+  model saw it; its stored location is where the quote is.
+- **Bounds.** Files outside `paths`, in `exclude`, in protected paths marked `excluded`,
+  binary, over 1 MB, or symbolic links are not read. Files, characters and findings per run
+  are capped, and model calls are split into parts, all under the stage budgets.
+- **Alternatives.** Checks over logs and metrics (they have their own analysis); a separate
+  run table (no gain over `AuditRun`, and a migration). See `docs/DECISIONS.md`.
+
 ## Known limitations (MVP)
 
 - Upgrades are stop-and-start, not rolling: an older process must not run against a newer

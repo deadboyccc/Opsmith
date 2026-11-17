@@ -110,6 +110,9 @@ stored and fail later inside a job.
 `osv_online = true` sends the names and versions of your dependencies to `api.osv.dev`. Leave
 it off if that must not leave your network.
 
+`checks` holds the project's checks: standing instructions a model carries out against the
+code on a schedule, such as a weekly security review. See [Checks](checks.md).
+
 ## Repositories
 
 ```toml
@@ -389,6 +392,7 @@ A webhook receives `{"text": "...", "event": "..."}`, which Slack-compatible end
 | `task.regressed` | The problem came back after the merge |
 | `lead.escalated` | A lead stayed undecided for too long |
 | `inference.failed` | An analysis run failed (the model call failed or its output was unusable) |
+| `check.failed` | A [check](checks.md) run failed or did nothing (no model can follow it, or no file matches) |
 | `budget.exceeded` | A cost or token cap stopped a stage |
 | `job.dead` | A job used up its retries |
 

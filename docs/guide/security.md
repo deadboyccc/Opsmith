@@ -29,7 +29,7 @@ If a change would weaken one of these, it is the wrong change.
 | Actor or input | Trusted? | Notes |
 |---|---|---|
 | The operator (sets `OPSMITH_*`, runs the processes) | Yes | Controls everything |
-| Admins of a tenant | **Trusted with the worker** | They set repository commands, connector URLs and credential references. See [limits](#what-is-not-protected) |
+| Admins of a tenant | **Trusted with the worker** | They set repository commands, connector URLs and credential references, and write the instructions of [checks](checks.md), which reach the model as instructions. See [limits](#what-is-not-protected) |
 | Reviewers, viewers | For their role only | Enforced on every route |
 | `service` keys (log collectors) | Push signals only | Cannot read anything, cannot use the UI |
 | Log lines, metrics, source code, file names | No | Attacker-influenced. Treated as data everywhere |
@@ -86,6 +86,9 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | Secrets and PII are redacted before storage and before every model call | `redaction.py`, applied in ETL and in `LLMGateway` | `tests/test_redaction.py`, `test_gateway_redacts_before_provider_and_guards_injection` |
 | Untrusted text cannot escape its data block in a prompt | The payload is escaped so it cannot contain the closing tag; so is the validator's report quoted on a corrective retry | `test_untrusted_content_cannot_close_its_own_data_block`, `test_the_validation_report_cannot_close_its_own_framing` |
 | Invented ids and evidence are discarded | The orchestrator checks every reference against the run's input | `test_untrusted_model_output_is_contained` |
+| A check's finding points at code that exists | A finding must quote the file it names; the quote is looked up in the file as the model saw it, and anything else is discarded and counted | `test_a_finding_is_kept_only_if_it_quotes_the_file_it_names` |
+| Code cannot pose as a check's instruction, and the instruction leaves redacted | The administrator's instruction has its own block outside the data; neither block can be closed early; the instruction is redacted like the data | `test_text_in_the_code_cannot_pose_as_the_instruction`, `test_the_instruction_is_redacted_before_it_leaves` |
+| A check sends a model only the files it covers | Protected paths marked `excluded`, the check's `exclude`, binaries and symbolic links (which could point at the worker's own files) are never read | `test_a_check_never_sends_excluded_outside_or_unreadable_files` |
 | Only allowed providers receive data | Process allowlist intersected with the project's, for every provider | `test_provider_allowlist_is_enforced`, `test_openai_provider_is_subject_to_the_allowlists` |
 | Project configuration cannot redirect model calls | Model endpoints and their keys are operator settings; a project chooses only a provider name and a model | `test_settings_and_default_gateway` |
 | An audited repository cannot reconfigure the scanners that audit it | ruff runs `--isolated`; gitleaks gets the platform's config (`--config`); trivy runs from an empty directory, away from a committed `trivy.yaml` or `.trivyignore`; file names follow `--` | `test_file_names_are_never_read_as_scanner_options`, `test_scanner_configuration_in_the_checkout_is_not_used`, `test_real_gitleaks_ignores_an_allowlist_committed_to_the_repository` (real gitleaks), `test_real_trivy_ignores_a_config_committed_to_the_repository` (real trivy) |

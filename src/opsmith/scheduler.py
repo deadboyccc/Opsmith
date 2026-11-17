@@ -201,7 +201,8 @@ def ensure_project_schedules(session: Session, project: Project) -> list[Schedul
         )
     for svc in session.scalars(select(Service).where(Service.project_id == p)).all():
         out.append(ensure_inference_schedule(session, project, svc, settings))
-    for repo in session.scalars(select(Repository).where(Repository.project_id == p)).all():
+    repos = session.scalars(select(Repository).where(Repository.project_id == p)).all()
+    for repo in repos:
         out.append(
             upsert_schedule(
                 session,
@@ -213,6 +214,7 @@ def ensure_project_schedules(session: Session, project: Project) -> list[Schedul
                 payload={"repository_id": repo.id, "mode": "auto"},
             )
         )
+    out += ensure_check_schedules(session, project, settings, list(repos))
     out.append(
         upsert_schedule(
             session,
@@ -224,6 +226,42 @@ def ensure_project_schedules(session: Session, project: Project) -> list[Schedul
             payload={"project_id": p},
         )
     )
+    return out
+
+
+def ensure_check_schedules(
+    session: Session, project: Project, settings: ProjectSettings, repos: list[Repository]
+) -> list[Schedule]:
+    """One schedule per enabled check and repository it covers, on the check's cron. The
+    schedules of checks that were removed, disabled or narrowed are deleted, so a check that
+    is gone stops running."""
+    from opsmith.audits.checks import applies_to, check_target_id  # noqa: PLC0415 - cycle
+
+    out: list[Schedule] = []
+    for check in settings.checks:
+        if not check.enabled:
+            continue
+        for repo in repos:
+            if applies_to(check, repo):
+                out.append(
+                    upsert_schedule(
+                        session,
+                        tenant_id=project.tenant_id,
+                        project_id=project.id,
+                        job_kind="check",
+                        target_id=check_target_id(repo.id, check.name),
+                        cron=check.cron,
+                        payload={"repository_id": repo.id, "check": check.name},
+                    )
+                )
+    wanted = {schedule.id for schedule in out}
+    stale = session.scalars(
+        select(Schedule).where(Schedule.project_id == project.id, Schedule.job_kind == "check")
+    ).all()
+    for schedule in stale:
+        if schedule.id not in wanted:
+            session.delete(schedule)
+    session.flush()
     return out
 
 

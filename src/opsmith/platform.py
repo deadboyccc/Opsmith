@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from opsmith import audit_log, notifications
 from opsmith.aggregation.aggregator import Aggregator
+from opsmith.audits.checks import CheckRunner
 from opsmith.audits.runner import AuditRunner
 from opsmith.config import Settings
 from opsmith.connectors import build_connector
@@ -129,6 +130,7 @@ class Platform:
         self.bundles = BundleBuilder(self.store)
         self.inference = InferenceOrchestrator(self.gateway)
         self.audits = AuditRunner(self.gateway, self.scm, self.settings.data_dir / "checkouts")
+        self.checks = CheckRunner(self.gateway, self.scm, self.settings.data_dir / "checkouts")
         self.aggregator = Aggregator(self.gateway)
         self.reviews = ReviewService()
         self.executor = ExecutionService(
@@ -165,6 +167,12 @@ class Platform:
             )
             return {"run_id": run.id, "findings": run.findings_count}
 
+        def check(s: Session, job: Job) -> dict[str, Any]:
+            run = self.checks.run(s, job.payload["repository_id"], job.payload["check"])
+            if run is None:
+                return {"status": "not_configured"}
+            return {"run_id": run.id, "status": run.status, "findings": run.findings_count}
+
         def aggregate(s: Session, job: Job) -> dict[str, Any]:
             return dict(self.aggregator.run(s, job.payload["project_id"]))
 
@@ -182,6 +190,7 @@ class Platform:
             "build_bundles": build_bundles,
             "inference": inference,
             "audit": audit,
+            "check": check,
             "aggregate": aggregate,
             "execute": execute,
             "track_prs": track_prs,
