@@ -30,7 +30,7 @@ Supporting pieces:
   worker; use PostgreSQL for anything shared or long-lived.
 - **The data directory** (`OPSMITH_DATA_DIR`) holds stored signals. Every worker and the API
   need the same directory (a shared volume).
-- **A sandbox** for running repository checks. This is the one part you must set up
+- **A sandbox** for running the repository's build, lint and test commands. This is the one part you must set up
   deliberately; see [Execution sandbox](#execution-sandbox).
 
 `opsmith run` starts all three processes in one, for development only.
@@ -72,19 +72,31 @@ docker compose exec api opsmith init --tenant acme --admin "Your Name"
    ```
 
 The API is published on `127.0.0.1:8000` only. To expose it, put a TLS-terminating reverse
-proxy in front and set `OPSMITH_BASE_URL` to the public URL.
+proxy in front that passes the browser's `Host` header through unchanged (Caddy does by
+default; nginx needs `proxy_set_header Host $host;`), and set `OPSMITH_BASE_URL` to the
+public URL. If the proxy changes `Host`, the UI refuses every form post, sign-in included,
+with `403`.
 
 To serve Opsmith under one path of a domain that hosts other things (for example
 `https://example.org/opsmith/`), set `OPSMITH_BASE_PATH=/opsmith` and route that path to it
 without stripping the prefix. The API, the UI, its assets and the API reference then live
-under the path, and the sign-in cookie is scoped to it. With Caddy:
+under the path, and the sign-in cookie is scoped to it. Set `OPSMITH_BASE_URL` to the full
+address, path included (`https://example.org/opsmith`), or the links in pull requests miss the
+path. `/healthz` and `/metrics` stay at the root as well, where health checks and Prometheus
+look for them. With Caddy on the same host:
 
 ```caddyfile
 redir /opsmith /opsmith/ 308
 handle /opsmith/* {
-	reverse_proxy opsmith:8000
+	respond /opsmith/metrics 404
+	respond /opsmith/healthz 404
+	reverse_proxy 127.0.0.1:8000
 }
 ```
+
+Compose publishes the API on `127.0.0.1:8000`; a Caddy container in the same Compose project
+reaches it at `api:8000` instead. The two `respond` lines keep `/metrics` and `/healthz`
+private.
 
 Put your own access control in front of the route if the domain's users should not all
 reach Opsmith's sign-in page (Caddy's `forward_auth`, for example).
@@ -103,14 +115,16 @@ Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), git, and PostgreSQ
 uv sync --extra postgres --extra anthropic --no-dev
 export OPSMITH_DATABASE_URL=postgresql+psycopg://opsmith:<password>@db-host:5432/opsmith
 export OPSMITH_DATA_DIR=/var/lib/opsmith/data
-uv run opsmith init --tenant acme --admin "Your Name"
-uv run opsmith api --host 127.0.0.1 --port 8000     # one unit
-uv run opsmith scheduler                            # another
-uv run opsmith worker                               # another; run as a non-root user
+uv run --no-dev opsmith init --tenant acme --admin "Your Name"
+uv run --no-dev opsmith api --host 127.0.0.1 --port 8000     # one unit
+uv run --no-dev opsmith scheduler                            # another
+uv run --no-dev opsmith worker                               # another; run as a non-root user
 ```
 
 Run each as its own service (systemd, a supervisor, or containers). A worker on a host that has
-Docker can use the Docker sandbox directly, with no extra wiring.
+Docker can use the Docker sandbox directly if its user may use Docker (usually through the
+`docker` group). That access is equivalent to root on the host, as with the socket mount
+below, so give that host the same care.
 
 ## Execution sandbox
 
@@ -139,8 +153,8 @@ Set `OPSMITH_SANDBOX_IMAGE` to an image that **already contains everything your 
 the language runtime, the test runner and the project's dependencies. The sandbox has no
 network, so `pip install`, `npm ci` and similar commands cannot work inside it. Build an image
 from your project's own CI image or Dockerfile, with dependencies installed, and point Opsmith
-at it. A check that tries to download something fails, and the task returns to review with the
-check's output.
+at it. A build, lint or test command that tries to download something fails, and the task
+returns to review with its output.
 
 One image serves every repository a worker handles. If your repositories need different
 toolchains, run separate deployments or a combined image for now.
@@ -161,6 +175,13 @@ sudo install -d -o 10001 -g 10001 -m 0750 /var/lib/opsmith/work
 docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
 ```
 
+Compose uses the overlay only when it is named. Add this line to `.env`, so that every later
+`docker compose` command, upgrades included, keeps it:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.sandbox.yml
+```
+
 What the overlay does:
 
 - Mounts the host's Docker socket into the worker so it can start sandbox containers.
@@ -171,17 +192,18 @@ Understand the trade-off before you use it. Access to the Docker socket is equiv
 that host. The worker is trusted code and the socket is never passed into a sandbox, but the
 worker container is now privileged. Put it on a dedicated host or VM, away from anything you
 would not want a compromised worker to reach. A worker installed directly on a host that has
-Docker ([Option 2](#option-2-processes-on-a-host)) needs no socket mount at all.
+Docker ([Option 2](#option-2-processes-on-a-host)) needs no socket mount, but its access to
+Docker is the same root-equivalent privilege.
 
 ### What the platform does around the sandbox
 
 - The agent has no shell. It can list, read and write files inside the checkout and run the
-  three configured checks by name, nothing else.
+  repository's build, lint and test commands by name, nothing else.
 - The checkout has its remote removed and holds no credentials.
 - Before the agent starts, Opsmith snapshots the repository metadata (`.git`) outside the
   checkout. Every later git command (status, diff, commit, push) uses only that snapshot, with
   hooks disabled. Anything a sandboxed command writes into the checkout's own `.git` is ignored.
-- After the last check has run, the resulting diff is gated: protected paths and
+- After the last of those commands has run, the resulting diff is gated: protected paths and
   credential-like values block the pull request.
 - The approval is re-checked immediately before the push.
 
@@ -226,7 +248,7 @@ All are optional unless marked. [`.env.example`](../../.env.example) lists the s
 | `OPSMITH_OPENAI_JSON_MODE` | `json_schema` | `json_object` for endpoints that only support plain JSON mode |
 | `OPSMITH_ANTHROPIC_API_KEY_REF` | `env:ANTHROPIC_API_KEY` | Where the Claude API key comes from |
 | `OPSMITH_ANTHROPIC_FALLBACKS` | `default` | Server-side refusal fallbacks for Claude; `off` disables |
-| `OPSMITH_BASE_URL` | unset | Public URL of the UI; makes pull requests link to their task |
+| `OPSMITH_BASE_URL` | unset | Public URL of the UI, including `OPSMITH_BASE_PATH` when set; makes pull requests link to their task |
 | `OPSMITH_BASE_PATH` | unset | Serve the API and UI under this path (`/opsmith`) instead of the root, behind a proxy that routes that path here |
 | `OPSMITH_WORKER_LEASE_SECONDS` | `900` | How long after a worker dies its job is retried |
 | `OPSMITH_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, in either case. Anything else stops the process at start |
@@ -234,5 +256,7 @@ All are optional unless marked. [`.env.example`](../../.env.example) lists the s
 | `OPSMITH_BOT_NAME`, `OPSMITH_BOT_EMAIL` | `Opsmith Bot`, a noreply address | Author of agent commits |
 | `DOCKER_GID` | none | Only with the sandbox overlay: group id of the Docker socket |
 
-An invalid value stops the process at start with a message naming the setting.
+An invalid value stops the process at start with a message naming the setting. Two are not
+checked: `OPSMITH_LOG_JSON` treats anything other than `true`, `1` or `yes` as `false`, and
+`OPSMITH_ANTHROPIC_FALLBACKS` is sent to the Claude API as written unless it is `off`.
 

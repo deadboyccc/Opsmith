@@ -13,13 +13,14 @@ For people who run it: evaluating it, configuring projects, operating a deployme
 | [UI tour](guide/ui-tour.md) | See what it looks like, with screenshots of every page |
 | [Concepts](guide/concepts.md) | Understand the terms, the pipeline and the lifecycles |
 | [Configuration](guide/configuration.md) | Describe projects: repositories, services, connectors, budgets, protected paths, notifications |
+| [Checks](guide/checks.md) | Write your own review instructions, which a model carries out on a schedule, and see how their findings become tasks |
 | [Models](guide/models.md) | Choose a model provider (offline rules, any OpenAI-compatible endpoint, Claude) and set models per stage |
 | [Deployment](guide/deployment.md) | Install it for real: Compose or processes, the execution sandbox, GitHub, environment variables |
 | [Operations](guide/operations.md) | Monitor it, upgrade it, troubleshoot it |
 | [API](guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](guide/security.md) | Know what is guaranteed, how, which test proves it, and what is not protected |
 | [Security audit](SECURITY-AUDIT.md) | See what the last audit looked for, what it found and fixed, and what is still open |
-| [Compatibility](guide/compatibility.md) | See which versions of Loki, Prometheus, GitHub, models, Python, PostgreSQL and Docker are verified, and how |
+| [Compatibility](guide/compatibility.md) | See which versions of Loki, VictoriaLogs, Prometheus, GitHub, models, Python, PostgreSQL and Docker are verified, and how |
 
 ## Developing Opsmith
 

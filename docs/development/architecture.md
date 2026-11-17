@@ -33,7 +33,7 @@ flowchart TB
     SCHED --> DB
     WORKER <--> DB
     WORKER --> OBJ
-    WORKER --> SRC["Loki · Prometheus · files"]
+    WORKER --> SRC["Loki · Prometheus · VictoriaLogs · files"]
     WORKER --> LLM["LLM gateway<br/>offline rules, Claude, or any<br/>OpenAI-compatible endpoint"]
     WORKER --> SANDBOX["Sandbox containers<br/>no network"]
     WORKER --> GH["GitHub<br/>branch push and PR only"]
@@ -63,8 +63,10 @@ flowchart LR
     S --> INF["inference<br/>per service"]
     BB -. "bundles wait for<br/>the next run" .-> INF
     S --> AUD["audit<br/>per repository"]
+    S --> CHK["check<br/>per check and repository"]
     INF --> AGG["aggregate<br/>per project"]
     AUD --> AGG
+    CHK --> AGG
     AGG --> N1["notify"]
     REV["review (API/UI)"] --> EXE["execute<br/>per task"]
     EXE --> N2["notify"]
@@ -79,9 +81,9 @@ flowchart LR
 | `inference` | `inference.orchestrator.InferenceOrchestrator.run` | scheduler, manual trigger |
 | `audit` | `audits.runner.AuditRunner.run` | scheduler, manual trigger |
 | `check` | `audits.checks.CheckRunner.run` | scheduler, manual trigger |
-| `aggregate` | `aggregation.aggregator.Aggregator.run` | inference, audit, check |
+| `aggregate` | `aggregation.aggregator.Aggregator.run` | inference, audit, check, manual trigger |
 | `execute` | `executor.service.ExecutionService.execute` | an approving review |
-| `track_prs` | `tracking.PRTracker.run` | scheduler |
+| `track_prs` | `tracking.PRTracker.run` | scheduler, manual trigger |
 | `verify` | `tracking.Verifier.run` | PR tracking, after a merge |
 | `notify` | `notifications.handle_notify_job` | anything that calls `notifications.notify` |
 
@@ -101,7 +103,7 @@ Every stage is a job in a database-backed queue.
 - **Waiting is not failing.** A handler can ask to be run later (for example while another task
   touches the same files) without using up an attempt.
 - **Schedules** live in the database: an interval or a five-field cron expression per connector,
-  service, repository and project. The slot is part of the job key, so several schedulers or
+  service, repository, check and project. The slot is part of the job key, so several schedulers or
   repeated ticks never double-enqueue, and missed slots collapse into one run. A schedule that
   cannot be computed is disabled and audited rather than stopping the others.
 
@@ -121,8 +123,9 @@ Implementation notes:
 - Work that must not overlap is serialized where the shared thing lives. One aggregation per
   project and one analysis per service take a row lock (`db.SERIALIZE`: `FOR NO KEY UPDATE`
   on PostgreSQL, which excludes another holder but not the inserts that reference the row).
-  One audit per repository takes an advisory file lock next to the repository's checkout,
-  because the shared thing there is a directory; a second audit is deferred.
+  Audits and checks of one repository share one advisory file lock next to the repository's
+  checkout (`audits.runner.checkout_lock`), because the shared thing there is a directory; a
+  second run is deferred.
 - The API commits a request's transaction when its handler returns, before the response is
   sent (`deps.SessionDep` is a function-scoped dependency), so a failed commit is never
   answered with a 2xx.
@@ -190,10 +193,10 @@ Each of these has a test that tries to defeat it; [Security](../guide/security.m
 | `platform.py` | Wires everything together and maps job kinds to handlers. Start reading here |
 | `models.py`, `schemas.py` | Database entities; settings and model-output schemas |
 | `migrations/` | Schema migrations (Alembic), applied when a process starts |
-| `connectors/`, `etl/` | Signal sources (Loki, Prometheus, files, push); normalize, redact, store, bundle |
+| `connectors/`, `etl/` | Signal sources (Loki, Prometheus, VictoriaLogs, files, push); normalize, redact, store, bundle |
 | `redaction.py` | Secret and PII detectors, shared by ingestion, the gateway and the diff gate |
 | `inference/orchestrator.py` | Chained analysis runs and the lead lifecycle |
-| `audits/` | Analyzers, external tool wrappers, the audit runner |
+| `audits/` | Analyzers, external tool wrappers, the audit runner, and checks (`checks.py`, ADR-019) |
 | `aggregation/` | Correlation, dedup, suppression, scoring, task drafting |
 | `review.py` | The human review gate and the approval scope digest |
 | `executor/` | Sandboxes, the confined workspace, coding agents, the execution service, PR text |
@@ -205,6 +208,12 @@ Each of these has a test that tries to defeat it; [Security](../guide/security.m
 | `localfs.py`, `config.py`, `protection.py` | Host-file confinement; process settings and credential references; protected paths |
 | `api/`, `ui/` | REST API (`/api/v1`) and the server-rendered UI (`/ui`) |
 | `cli.py`, `demo.py` | The `opsmith` command; the offline end-to-end scenario |
+| `gitutil.py` | The only place git is invoked: safe config, the trusted git dir, NUL-delimited parsing |
+| `db.py` | Engine and sessions, `utcnow`, `new_id`, the `SERIALIZE` row lock |
+| `security.py` | Tenants, users, roles and API keys (stored as SHA-256) |
+| `notifications.py` | The notification outbox; delivery is a `notify` job |
+| `provenance.py`, `dashboard.py` | A task's provenance chain; dashboard figures and the task funnel |
+| `storage.py`, `observability.py`, `configfile.py` | The object store; JSON logs and `/metrics`; `opsmith apply` |
 
 ## Extending Opsmith
 
@@ -246,6 +255,13 @@ Changes inside Opsmith:
   `ui/templates/macros.html`, `dashboard.FUNNEL`, and add an ADR entry.
 - **A new setting:** add it to `schemas.ProjectSettings` with a bound, document it in
   [Configuration](../guide/configuration.md), and add it to `opsmith.example.toml`.
+- **Anything users can see:** `make docs` fails until it is documented. Environment variables
+  go in [Deployment](../guide/deployment.md) and `.env.example`; API endpoints in
+  [API](../guide/api.md); notification events, connector types and audit types in
+  [Configuration](../guide/configuration.md); analyzers and task or lead states in
+  [Concepts](../guide/concepts.md); model providers and coding agents in
+  [Models](../guide/models.md); CLI commands in the README; job kinds in the table on this
+  page.
 - **A schema change:** change `models.py`, then write a revision against a scratch database
   that is at the newest revision:
 

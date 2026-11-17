@@ -18,7 +18,7 @@ product features.
 | P1 · Harden the container boundary | **Done** for what containers can give; microVMs remain future work |
 | P1 · Turn the claims into security and reliability tests | **Done** for the listed scenarios |
 | P1 · Publish quality and operational measurements | **Not done.** Needs real usage data |
-| P2 · Make the project easier to evaluate | **Partly done** (documentation); repository metadata and media remain |
+| P2 · Make the project easier to evaluate | **Partly done**: documentation, a demo video and a connector version matrix. The About section is a repository setting (text in [Repository About text](repository-about.md)); a roadmap remains |
 
 ## P0 · Fail closed on the database password
 
@@ -130,14 +130,15 @@ Done:
 - A step-by-step [getting-started guide](../guide/getting-started.md) whose commands were run
   as written.
 
-Not done: a GitHub About description and topics, a recorded demo, a tested connector and
-version matrix, and a public roadmap. The first is a repository setting; the rest need time
-with a live deployment.
+Done since: a recorded demo and a vertical reel ([UI tour](../guide/ui-tour.md#how-the-pictures-and-videos-are-made)),
+and a tested connector and version matrix ([Compatibility](../guide/compatibility.md), run in
+CI). The About description and topics are a repository setting; their text is in
+[Repository About text](repository-about.md). Not done: a public roadmap.
 
 ## Roadmap items from the review
 
 | Timeframe in the review | Exit criterion | State |
 |---|---|---|
 | First 1 to 2 weeks | No default DB password; production cannot use the local sandbox; approval bound to immutable work; threat model and adversarial tests | Met |
-| Next 30 days | Fresh-install guide; reproducible demo; tests on PostgreSQL; GitHub PR flow; documented connector versions; crash, retry and tenant-isolation evidence | Partly: the guide, the demo, the full suite on PostgreSQL and the reliability tests exist. A live GitHub flow in CI and a connector version matrix do not |
+| Next 30 days | Fresh-install guide; reproducible demo; tests on PostgreSQL; GitHub PR flow; documented connector versions; crash, retry and tenant-isolation evidence | Partly: the guide, the demo, the full suite on PostgreSQL, the connector version matrix and the reliability tests exist. A live GitHub flow in CI and a connector version matrix do not |
 | Next 60 days | Public benchmark; measured fix and verification rates; sample PR; comparison with manual triage; documented limitations | Only the documented limitations |

@@ -57,8 +57,9 @@ OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-The container image includes the Anthropic SDK. Elsewhere install the extra:
-`uv sync --extra anthropic`.
+The container image includes the Anthropic SDK, and so does a source install made with
+`uv sync --all-extras`, as in [Getting started](getting-started.md). `uv sync` removes extras
+you do not name, so add `--extra anthropic` to the extras you already use.
 
 Notes for the `openai` provider:
 
@@ -170,7 +171,11 @@ built-in rules.
   retry. A model that cannot produce valid output makes that run `failed`; nothing is guessed.
 - **Tool calling, for the coding agent.** Pick a model your endpoint serves with function or
   tool calling enabled.
-- **Enough context** for a bundle (a few thousand tokens) plus `max_tokens` of output.
+- **Enough context.** A bundle takes a few thousand tokens, plus `max_tokens` of output. The
+  `check` stage needs far more: each call carries up to about 120,000 characters of code
+  (about 30,000 tokens), and a larger file is sent whole. Give that stage a model and server
+  with a context of at least 32,000 tokens plus `max_tokens`, and keep large generated files
+  out with the check's `exclude`.
 
 The protocol is the same for every model; the quality of the findings and fixes is the model's.
 Small local models work and find less. `effort` is passed to Claude only.
@@ -187,6 +192,8 @@ selected by any project.
 
 ## Adding another provider
 
-A provider is a Python object with a `name` and a `complete(request)` method. Package it and
-register it in the `opsmith.llm_providers` entry-point group; Opsmith loads it at start. See
-[development/architecture.md](../development/architecture.md#extending-opsmith).
+A provider is a Python object with a `name` and a `complete(request)` method. Package a
+function that takes the process settings and returns it, and register that function in the
+`opsmith.llm_providers` entry-point group; the entry point's name is the `provider` a stage
+names. Opsmith loads it at start. Add that name to `OPSMITH_LLM_PROVIDER_ALLOWLIST`, or no
+project can use it. See [development/architecture.md](../development/architecture.md#extending-opsmith).

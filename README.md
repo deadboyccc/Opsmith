@@ -13,13 +13,14 @@
 It watches your logs, metrics and repositories, links what production shows to what the code
 shows, and ranks the result as engineering tasks. When a human approves a task, a sandboxed
 coding agent implements it and opens a pull request. After a human merges it, Opsmith checks
-that the original problem is actually gone. You can also give it review instructions of your
-own, such as "audit this code for bugs and performance issues", which a model carries out on
-a schedule you choose ([checks](docs/guide/checks.md)).
+that the original problem is actually gone.
 
-It is self-hosted and not tied to a model vendor: it runs offline with built-in rules, with
-Claude, or with any OpenAI-compatible endpoint, including local models served by Ollama or
-vLLM.
+It is for teams that run their own services and want fixes proposed from production evidence,
+with a person deciding every change. It is self-hosted and not tied to a model vendor: it runs
+offline with built-in rules, with Claude, or with any OpenAI-compatible endpoint, including
+local models served by Ollama or vLLM. With a model, it can also carry out review instructions
+of your own on a schedule, such as "audit this code for bugs and performance issues"
+([checks](docs/guide/checks.md)).
 
 > **Two rules are never broken.** Nothing changes code without a recorded human approval, and
 > Opsmith cannot merge. A human always merges.
@@ -42,7 +43,8 @@ you point it at something valuable.
 
 ## See it work in a minute
 
-You need [uv](https://docs.astral.sh/uv/) and git. No API key, no Docker, no network.
+You need [uv](https://docs.astral.sh/uv/) and git. No API key and no Docker; once installed,
+the demo runs without network access.
 
 ```bash
 git clone https://github.com/deadboyccc/Opsmith.git && cd Opsmith
@@ -59,7 +61,8 @@ entire loop with the offline rule-based provider:
    run, and a latency regression is found.
 3. **Repository audit:** finds an HTTP call without a timeout on the same line the errors point
    at. The runtime finding and the code finding **merge into one task**.
-4. A reviewer **approves** the task. The agent fixes the code and the checks pass.
+4. A reviewer **approves** the task. The agent fixes the code, and the repository's build,
+   lint and test pass.
 5. A **pull request** opens, a human merges it, and the task ends **`verified`**.
 
 It prints an admin API key. Use it to look around in the UI:
@@ -117,7 +120,7 @@ flowchart TB
 | 3 | **Audit** | On a schedule: secrets, Python bug and security checks, dependency and license checks, your own policy rules, external scanners when installed, and [checks](docs/guide/checks.md): your own review instructions, carried out by a model | **Findings** with code locations |
 | 4 | **Aggregate** | Findings that point at the same code are merged, checked against open, recently closed and rejected tasks, then scored | Ranked **tasks** |
 | 5 | **Review** | A person approves, approves with edits, rejects with a reason, defers, or asks for more investigation | A recorded **review** |
-| 6 | **Execute** | An isolated agent edits the checkout and runs the repository's build, lint and test. Opsmith re-runs the checks and blocks unsafe diffs | A tested commit on a new branch |
+| 6 | **Execute** | An isolated agent edits the checkout and runs the repository's build, lint and test. Opsmith re-runs build, lint and test and blocks unsafe diffs | A tested commit on a new branch |
 | 7 | **Pull request** | Opsmith pushes the branch and opens a PR that carries the evidence, the checks and links back to the task | A **PR**; CI is tracked |
 | 8 | **Verify** | After the merge, Opsmith watches the original signal | `verified` or `regressed` |
 
@@ -138,7 +141,8 @@ lifecycles of leads and tasks are explained in [Concepts](docs/guide/concepts.md
 
 **[Getting started](docs/guide/getting-started.md)** walks through it step by step: set up a
 project for a repository of yours, send it logs, and get your first task and pull request. It
-takes about fifteen minutes and needs no API key, no Docker and no network. In short:
+takes about fifteen minutes and needs no API key and no Docker, and no network once installed.
+In short:
 
 ```bash
 export OPSMITH_LOCAL_ROOT=$HOME/opsmith-lab     # the one directory Opsmith may read repos and files from
@@ -211,7 +215,7 @@ Honest scope, so you can judge it:
 | The full loop | `tests/test_e2e.py` asserts the specification's acceptance criteria end to end, on SQLite and on PostgreSQL in CI |
 | Safety gates | `tests/test_hardening.py` and friends attack each guarantee: approval binding, gate bypasses, sandbox escapes, cross-tenant access, role escalation |
 | Docker sandbox | Tested with **real containers** (network, filesystem, capabilities, timeouts, and a full execution). Skipped automatically where Docker is absent |
-| Compose deployment | Built and started end to end, including the worker starting sandbox containers through the overlay |
+| Compose deployment | Built and started end to end by hand before 1.0.0, including the worker starting sandbox containers through the overlay. CI builds both images and validates the Compose files on every push, but does not start the stack |
 | Documentation | Every command in [Getting started](docs/guide/getting-started.md) was run as written. A check in CI compares the docs with the code: links, cited tests, environment variables, settings, API endpoints, events, connector types, states and commands |
 | Coverage | 94.5% of lines and branches. CI fails below 93%, and audits the locked dependencies for known vulnerabilities on every push |
 | Loki, Prometheus | Run **against real servers** in CI on every push: Loki 2.9 and 3.7, Prometheus 2.53, 3.5 and 3.16. See the [compatibility matrix](docs/guide/compatibility.md) |
@@ -239,6 +243,7 @@ in [docs/README.md](docs/README.md). The pages are split by reader.
 | [UI tour](docs/guide/ui-tour.md) | See what it looks like |
 | [Concepts](docs/guide/concepts.md) | Understand the terms, the pipeline and the lifecycles |
 | [Configuration](docs/guide/configuration.md) | Describe projects: repositories, connectors, budgets, protected paths |
+| [Checks](docs/guide/checks.md) | Write review instructions that a model carries out on a schedule |
 | [Models](docs/guide/models.md) | Use offline rules, any OpenAI-compatible endpoint, or Claude |
 | [Deployment](docs/guide/deployment.md) | Install it for real: Compose, the sandbox, GitHub, environment variables |
 | [Operations](docs/guide/operations.md) | Monitor, upgrade and troubleshoot it |

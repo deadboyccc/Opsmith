@@ -23,6 +23,15 @@ the database schema says so under *Upgrade notes*.
 
 - `SECURITY.md`, issue forms for bug reports and feature requests, and a pull request template
   with the checklist from `AGENTS.md`.
+- A check in `opsmith.example.toml`.
+
+### Changed
+
+- A review of every page against the code: about ninety corrections across the guides, the
+  developer docs, the README and the landing page. Among them: how to stop a worker without
+  killing an execution, backup commands, keeping the sandbox overlay on upgrades, the `Host`
+  header behind a proxy, revoking a key, the check stage's context size, which settings
+  `opsmith apply` replaces, and what `succeeded` means for a check run.
 
 ### Upgrade notes
 

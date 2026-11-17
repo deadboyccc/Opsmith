@@ -17,7 +17,8 @@ hide:
 Opsmith watches your logs, metrics and repositories, links what production shows to what
 the code shows, and ranks the result as engineering tasks. When a person approves a task, a
 sandboxed coding agent implements it and opens a pull request. After a person merges it,
-Opsmith checks that the problem is actually gone.
+Opsmith checks that the problem is actually gone. It is self-hosted and works offline with
+built-in rules, with Claude, or with any OpenAI-compatible endpoint, including local models.
 
 [Get started](docs/guide/getting-started.md){ .md-button .md-button--primary }
 [See it in a minute](#see-it-in-a-minute){ .md-button }
@@ -38,9 +39,14 @@ Opsmith cannot merge. A human always merges.
 
 </div>
 
+**Status:** stable, not yet proven in production. Read [what has been tested](overview.md#what-has-been-tested)
+and [what is not protected](docs/guide/security.md#what-is-not-protected) before you point it
+at something valuable.
+
 ## See it in a minute
 
-You need [uv](https://docs.astral.sh/uv/) and git. No API key, no Docker, no network.
+You need [uv](https://docs.astral.sh/uv/) and git. No API key and no Docker; once installed,
+the demo runs without network access.
 
 ```bash
 git clone https://github.com/deadboyccc/Opsmith.git && cd Opsmith
@@ -64,7 +70,8 @@ one-minute video; here it is in thirty seconds:
 
 Write a check in plain words, such as "audit this code for bugs and performance issues", and
 choose when it runs. A model carries it out, and every problem it can point to in the code
-becomes a task for review, under the same two rules. See [Checks](docs/guide/checks.md).
+becomes a task for review, under the same two rules. Checks need a model: the built-in
+offline rules cannot follow an instruction written in words. See [Checks](docs/guide/checks.md).
 
 ## Where to go next
 

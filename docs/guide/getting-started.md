@@ -34,8 +34,8 @@ uv run opsmith demo --dir ./opsmith-demo
 
 In a few seconds the demo generates a small repository with a bug, feeds in logs and metrics,
 finds the problem from both sides, has a (simulated) reviewer approve the task, fixes the code,
-opens a pull request, merges it and verifies the fix. The last lines of its output include an
-admin API key. Use it to look around:
+opens a pull request, merges it and verifies the fix. The JSON at the end of its output lists
+two API keys. Use `api_keys.admin` to look around:
 
 ```bash
 OPSMITH_DATA_DIR=./opsmith-demo/data uv run opsmith api
@@ -54,10 +54,10 @@ mkdir -p $LAB/repos
 
 export OPSMITH_LOCAL_ROOT=$LAB           # the only directory Opsmith may read local repos from
 export OPSMITH_DATA_DIR=$LAB/data        # where Opsmith keeps its own data
-export OPSMITH_SANDBOX_BACKEND=local     # development only: runs checks without isolation
+export OPSMITH_SANDBOX_BACKEND=local     # development only: runs the test command without isolation
 ```
 
-Keep those three variables set in every terminal you use below.
+Keep these four variables set in every terminal you use below.
 
 > `OPSMITH_SANDBOX_BACKEND=local` runs your repository's test command directly on your machine.
 > That is fine for a repository you wrote. It is refused for GitHub repositories; a real

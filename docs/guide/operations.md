@@ -13,7 +13,8 @@ wrong.
 
 ## Health and metrics
 
-- `GET /healthz` checks that the API can reach the database.
+- `GET /healthz` checks that the API can reach the database. It stays at the root under
+  `OPSMITH_BASE_PATH`, as does `/metrics`.
 - `GET /metrics` is Prometheus text: stage latency, model calls with their cost and latency,
   ingested records, executions and HTTP timing.
 
@@ -33,7 +34,10 @@ Every stage is a queued job.
 - Run as many workers as you need. A running job's lease is renewed while its worker is alive,
   so a slow job is never handed to a second worker. If a worker dies, its job is picked up
   again after `OPSMITH_WORKER_LEASE_SECONDS`.
-- Stop a worker with `SIGTERM`. It finishes the job it is running first.
+- Stop a worker with `SIGTERM`. It finishes the job it is running first if it is given the
+  time: an execution can take up to `max_execution_seconds` (30 minutes by default), and
+  `docker compose stop` kills after 10 seconds, so use `docker compose stop -t 1800 worker`. A
+  killed job is retried after `OPSMITH_WORKER_LEASE_SECONDS`.
 - More than one scheduler is safe: a schedule slot is enqueued once however many ask.
 - A repository is audited or checked by one job at a time. An audit or check that starts
   while another one of the same repository is running is deferred by a minute (`another audit
@@ -68,24 +72,35 @@ Every state change and every decision is in the audit log, with who made it:
 
 Back up the PostgreSQL database and the data directory (`OPSMITH_DATA_DIR`) together. The
 database is the source of truth; the data directory holds the raw signals that evidence refers
-to.
+to. With Compose:
+
+```bash
+docker compose exec -T postgres pg_dump -U opsmith -Fc opsmith > opsmith-db-$(date +%F).dump
+docker run --rm -v opsmith_opsmith-data:/data:ro -v "$PWD":/backup postgres:18.6-alpine3.24 \
+  tar czf /backup/opsmith-data-$(date +%F).tgz -C /data .
+```
+
+To restore the database, start only `postgres` and run
+`docker compose exec -T postgres pg_restore -U opsmith -d opsmith --clean < opsmith-db-DATE.dump`.
 
 ## Upgrading
 
 Opsmith migrates its database itself: every process brings the schema to the newest revision
 when it starts, so an upgrade needs no separate step
 ([ADR-002](../../ARCHITECTURE_DECISIONS.md)). Releases that change the schema say so under
-*Upgrade notes* in the [changelog](../../CHANGELOG.md). On PostgreSQL, processes that start
-together wait for each other; one of them migrates.
+*Upgrade notes* in the [changelog](../../CHANGELOG.md). Processes that start together wait for
+each other, on PostgreSQL and on SQLite; one of them migrates.
 
 Stop the processes before you upgrade, so that nothing old runs against the new schema, and
 take a backup (see [Backups](#backups)): the backup is how you go back to an older release.
 
 ```bash
 git pull
-docker compose stop api worker scheduler    # the database keeps running for the backup
-# back up the database and the data directory here
-docker compose up -d --build                # the first process to start migrates
+docker compose stop -t 1800 worker          # let a running execution finish
+docker compose stop api scheduler           # the database keeps running for the backup
+# back up the database and the data directory here (see Backups)
+docker compose up -d --build                # the first process to start migrates; keeps the
+                                            # sandbox overlay only if COMPOSE_FILE is in .env
 ```
 
 A process refuses to start, with a message that starts `database schema:`, when:
@@ -106,15 +121,15 @@ release first opens it.
 | Task returns to review with `sandbox unavailable` | The worker cannot use Docker. See [Execution sandbox](deployment.md#execution-sandbox) |
 | Task returns to review with `sandbox policy` | `OPSMITH_SANDBOX_BACKEND=local` with a non-local repository. Use `docker` |
 | `docker could not start the sandbox` | The image is missing or cannot be pulled, or `OPSMITH_WORK_DIR` is not shared with the host at the same path |
-| Checks fail with download or DNS errors | The sandbox has no network. Bake dependencies into `OPSMITH_SANDBOX_IMAGE` |
+| Build, lint or test commands fail with download or DNS errors | The sandbox has no network. Bake dependencies into `OPSMITH_SANDBOX_IMAGE` |
 | `task changed after it was approved` | The task's scope changed between approval and execution. Review it again |
 | `... is outside OPSMITH_LOCAL_ROOT` or `reads the worker's filesystem, which is disabled` | Set `OPSMITH_LOCAL_ROOT` to the directory holding your local repositories and signal files |
 | `... names a variable reserved for the platform` | A `credentials_ref` pointed at one of Opsmith's own secrets. Use a dedicated variable |
 | An analysis run is `failed` with a validation error | The model did not return JSON matching the stage's schema, twice. Use a more capable model for that stage |
 | `model endpoint unreachable` or `HTTP 4xx` from the model endpoint | Check `OPSMITH_OPENAI_BASE_URL`, the key, and the model name in the project settings. A 429 or 5xx is retried twice before it is reported |
 | An audit or execution fails with `repository ...: a github repository needs an https:// clone URL` (or `default_branch must be a plain branch name`) | The repository was saved before 1.2.2 with a value git must not be given. Correct it with `opsmith apply` or the API |
-| `diff introduces credential-like values` naming a file the agent did not write | A check command left build output in the checkout (for example compiled bytecode holding a string from the source). Ignore those files in the repository's `.gitignore` |
-| An audit is deferred with `another audit of this repository is running` | Expected: audits of one repository share a checkout and run one at a time |
+| `diff introduces credential-like values` naming a file the agent did not write | A build, lint or test command left build output in the checkout (for example compiled bytecode holding a string from the source). Ignore those files in the repository's `.gitignore` |
+| An audit or check is deferred with `another audit of this repository is running` | Expected: audits and checks of one repository share a checkout and run one at a time |
 | `request body is over ... bytes` (`413`) | A request over 1 MiB, or a push over 32 MiB. Send pushes in smaller batches |
 | Permission denied on `/var/run/docker.sock` | `DOCKER_GID` does not match the socket's group |
 | UI form posts are rejected with 403 behind a proxy | The proxy must pass the browser's `Host` header through unchanged |

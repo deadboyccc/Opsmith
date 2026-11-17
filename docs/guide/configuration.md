@@ -29,6 +29,11 @@ This page covers project configuration. Process settings are listed in
 Describe your projects in one TOML file and apply it. Applying is safe to repeat: records are
 matched by name and updated in place.
 
+Project settings are the exception. Applying replaces them with the file's
+`[projects.settings]`, and anything the file leaves out goes back to its default, so settings
+changed in the UI or through the API since the last apply are lost, checks included. Keep the
+file as the one place you change settings, or copy UI changes into it first.
+
 ```bash
 opsmith apply opsmith.toml --tenant acme
 ```
@@ -62,7 +67,8 @@ config = { url = "http://loki:3100", query = '{service_name="payments-api"}' }
 [`opsmith.example.toml`](../../opsmith.example.toml) is a complete, annotated example.
 
 If anything in the file is invalid, `opsmith apply` prints what is wrong and writes nothing.
-Unknown keys are errors, so a typo cannot be silently ignored.
+Unknown keys are errors, at every level, so a misspelt key or table (`[projects.setings]`)
+cannot be silently ignored.
 
 Nothing removes records: deleting an entry from the file does not delete it from Opsmith.
 Disable a connector with `enabled = false` instead.
@@ -72,21 +78,25 @@ Disable a connector with `enabled = false` instead.
 A project groups repositories, services and connectors that belong together, and carries the
 settings below. All are optional; the defaults are shown.
 
+The examples on this page each start with `[projects.settings]`. A project may declare that
+header only once, so put the keys of several examples under a single `[projects.settings]`;
+tables such as `[projects.settings.budgets]` and `[[projects.settings.checks]]` follow it.
+
 ```toml
 [projects.settings]
 inference_interval_hours = 6        # how often each service is analyzed
 lead_max_carry = 3                  # runs a lead may stay undecided before it is escalated
 audit_cron = "0 2 * * *"            # when repositories are audited (UTC)
 audit_full_every_days = 7           # a full audit at least this often; changed files only in between
-ingest_interval_seconds = 900       # for connectors that set no interval_seconds of their own
+ingest_interval_seconds = 900       # given to a connector without interval_seconds when it is created or applied
 pr_poll_seconds = 600               # how often open pull requests are checked
-recently_closed_days = 14           # suppress findings for a problem fixed this recently
+recently_closed_days = 14           # suppress findings matching a task merged or closed this recently
 min_task_confidence = 0.3           # findings below this do not become tasks
 max_tasks_per_aggregation = 25      # the rest wait for the next aggregation
-auto_submit_for_review = true       # put new tasks straight into the review queue
+auto_submit_for_review = true       # false leaves new tasks in "proposed"; nothing submits them later
 post_merge_verification = true      # watch the signal after a merge
 verification_delay_hours = 6        # how long to wait after the merge before judging
-executor_agent = "heuristic"        # or "claude"
+executor_agent = "heuristic"        # or "claude" or "openai"; see Models
 osv_online = false                  # look up dependency vulnerabilities at osv.dev
 ```
 
@@ -101,11 +111,20 @@ osv_online = false                  # look up dependency vulnerabilities at osv.
 | `pr_poll_seconds` | 60 to 604800 (a week) |
 | `recently_closed_days` | 0 to 3650 |
 | `verification_delay_hours` | 0 to 8760 |
-| `budgets.*` | Positive; at most 10^8 tokens, $100,000 per run, $1,000,000 per day, 86400 execution seconds, 1000 agent iterations, 100 concurrent executions |
+| `budgets.*` | Token, time and count caps are positive; cost caps may be 0, which stops every stage, the offline rules included. At most 10^8 tokens, $100,000 per run, $1,000,000 per day, 86400 execution seconds, 1000 agent iterations, 100 concurrent executions |
 | `min_task_confidence` | 0 to 1 |
 
 Values are checked when you save them. A bad value is refused with a message; it cannot be
 stored and fail later inside a job.
+
+Names are the exception, because they are not compared with what exists. A misspelt
+`executor_agent` or stage `provider` fails the run that uses it, and a misspelt stage name
+under `llm.stages` (`stages.checks`) is ignored, so that stage uses `llm.default`. The stage
+names are `inference`, `audit_triage`, `check`, `task` and `executor`.
+
+A connector keeps the interval it was given. Changing `ingest_interval_seconds` in the UI or
+the API later does not change existing connectors: apply the file again, or set the schedule
+([Schedules](#schedules)).
 
 `osv_online = true` sends the names and versions of your dependencies to `api.osv.dev`. Leave
 it off if that must not leave your network.
@@ -131,12 +150,12 @@ audit_types = ["security", "bugs", "dependency", "compliance", "performance"]
 
 | Key | Meaning |
 |---|---|
-| `scm_provider` | `github`, or `local` for a git repository on the worker's disk (development and the demo). A `local` repository's `url` is a path and must be inside `OPSMITH_LOCAL_ROOT` |
+| `scm_provider` | `github`, or `local` for a git repository on the worker's disk (development and the demo). A `local` repository's `url` is a path and must be inside `OPSMITH_LOCAL_ROOT`. Left out in a file it is `local`, through the API `github`, so always set it |
 | `url` | For `github`: an `https://` clone URL, without credentials in it. Nothing else is accepted (no path, `file://`, `ssh://` or `http://`), because the value is handed to git on the worker |
 | `default_branch` | A plain branch name: letters, digits, `.`, `_`, `-` and `/`, starting with a letter or digit, at most 100 characters |
 | `credentials_ref` | Where the token comes from. See [Credentials](#credentials) and the [token permissions](deployment.md#connecting-a-github-repository) |
-| `build_command`, `lint_command`, `test_command` | The checks. Each is optional. They run **only inside the sandbox**, where there is **no network**: they must work with what the sandbox image already contains. Do not put `pip install` or `npm ci` in them |
-| `audit_types` | Which audits run: `security`, `bugs`, `compliance`, `performance`, `dependency`, `coverage` |
+| `build_command`, `lint_command`, `test_command` | The repository's own build, lint and test commands. Each is optional. They run **only inside the sandbox**, where there is **no network**: they must work with what the sandbox image already contains. Do not put `pip install` or `npm ci` in them |
+| `audit_types` | Which audits run: `security`, `bugs`, `compliance`, `performance`, `dependency`, `coverage`. The default is every type except `coverage` |
 
 The agent runs these checks while it works, and Opsmith runs them again itself before it opens
 a pull request. A pull request is only opened when every configured check passes. A repository
@@ -271,7 +290,9 @@ service = "payments-api"
 ```
 
 Records are sent to `POST /api/v1/connectors/{id}/push` with a `service` key; see
-[API](api.md#pushing-signals). The other connector types accept pushed records as well.
+[API](api.md#pushing-signals). The other connector types accept pushed records as well. A
+pushed record without `environment` is filed under `production`, whatever the connector's
+service; send `environment` with each record for any other.
 
 ### Where connectors may connect
 
@@ -331,6 +352,8 @@ already spent is refused and its task returns to review; a coding agent that rea
 mid-run stops there. Calls that fail, are refused or are cut off still count
 against the caps. Before each model call Opsmith reserves the worst case (the prompt plus the
 full output allowance), so set `max_tokens_per_run` comfortably above the stage's `max_tokens`.
+The coding agent checks the caps between its turns instead, so its last turn can go over them
+by one call; the `claude` agent allows up to 32,000 output tokens per turn.
 
 ## Models
 
@@ -420,8 +443,8 @@ Configuration never contains a secret, only a reference to one:
 
 | Form | Resolves to | Restrictions |
 |---|---|---|
-| `env:NAME` | The worker's environment variable `NAME` | `NAME` may not start with `OPSMITH_`, and may not be the database password or the LLM API key variable |
-| `file:/path/to/secret` | The contents of that file, trimmed | The file must be inside `OPSMITH_SECRETS_DIR` (default `/run/secrets`) |
+| `env:NAME` | The worker's environment variable `NAME` | `NAME` may not start with `OPSMITH_`, and may not be `POSTGRES_PASSWORD`, `PGPASSWORD`, `DATABASE_URL` or the variable holding a model provider's API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` by default) |
+| `file:/path/to/secret` | The contents of that file, trimmed | The file must be inside `OPSMITH_SECRETS_DIR` (default `/run/secrets`), and may not be the file holding a model provider's API key |
 
 The restrictions exist because the secret is sent to a URL chosen in the same configuration.
 Give each integration its own variable or file.
@@ -429,10 +452,12 @@ Give each integration its own variable or file.
 ## Schedules
 
 Opsmith creates schedules from the settings above: one per connector (ingest), per service
-(analysis), per repository (audit) and per project (pull request tracking). You normally change
-them by changing the settings.
+(analysis), per repository (audit), per enabled check and repository it covers (check), and
+per project (pull request tracking). You normally change them by changing the settings.
 
-To set one schedule's timing directly, or to pause it, use the API:
+To set one schedule's timing directly, or to pause it, use the API. Find the schedule's `id`
+with `GET /api/v1/projects/{id}/schedules`; the *Configuration* page does not show it. Here
+`$OPSMITH` is Opsmith's address, such as `http://127.0.0.1:8000`, and `$KEY` an admin key:
 
 ```bash
 curl -X PATCH $OPSMITH/api/v1/schedules/$SCHEDULE_ID -H "Authorization: Bearer $KEY" \
@@ -442,5 +467,7 @@ curl -X PATCH $OPSMITH/api/v1/schedules/$SCHEDULE_ID -H "Authorization: Bearer $
 Timing set this way is kept when project settings change later. To run a stage once, right
 now, use `POST /api/v1/projects/{id}/trigger` ([API](api.md#endpoints)).
 
-Settings can also be edited as JSON in the UI under *Config* (admins only). The UI replaces the
-whole settings object; the API's `PATCH` replaces only the top-level keys you send.
+Settings can also be edited as JSON in the UI under *Configuration* (admins only). The UI
+replaces the whole settings object. `PATCH /api/v1/projects/{id}/settings` replaces only the
+top-level keys you send, each as a whole: `{"settings": {"budgets": {"max_cost_per_day_usd":
+10}}}` resets the other budgets to their defaults, so send the complete `budgets` object.

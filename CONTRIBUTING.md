@@ -28,7 +28,7 @@ are in [`docs/development/architecture.md`](docs/development/architecture.md).
 ```bash
 uv run pytest tests/test_<area>.py -q    # iterate on the area you are touching
 make fmt                                 # auto-fix lint and formatting
-make check                               # ruff, format, mypy, tests + coverage floor, docs links
+make check                               # ruff, format, mypy, tests + coverage floor, docs check
 make audit                               # known vulnerabilities in the locked dependencies
 ```
 
@@ -37,13 +37,16 @@ What reviewers look for:
 - **A test for the behaviour**, including the failure path. For anything that guards safety
   (approval, sandbox, redaction, tenancy, roles) add a test that tries the bad path and shows it
   is blocked. `tests/test_hardening.py` has many examples.
-- **Tests stay offline.** Use `httpx.MockTransport` and fake clients; never the network.
+- **Tests stay offline.** Use `httpx.MockTransport`, also under the real Anthropic SDK; never
+  the network.
 - **No silent drops.** A failure must end as a retry, a dead job with a notification, a task
   back in review with a report, or a finding marked suppressed with a reason.
 - **Docs move with the code.** Pages for people *using* Opsmith are under `docs/guide/`; pages
   for people *changing* it are under `docs/development/`. Update the one your change affects,
-  `ARCHITECTURE_DECISIONS.md` for a design change, and add a line to `CHANGELOG.md`.
-  `make docs` checks every link. The pages are also the
+  `ARCHITECTURE_DECISIONS.md` for a design change, `docs/DECISIONS.md` for a choice between
+  workable options, and `CHANGELOG.md` under *Unreleased* in the same commit. `make docs`
+  checks every link and fails when a setting, endpoint, state or command the code offers is
+  not documented. The pages are also the
   [documentation site](https://deadboyccc.github.io/Opsmith/); `make site` builds it, and a
   new page needs an entry in `nav` in `mkdocs.yml`.
 
@@ -57,7 +60,6 @@ What reviewers look for:
 ## Reporting problems
 
 - Bugs and ideas: open an issue with what you did, what happened and what you expected.
-- Security problems: do not open a public issue. See
-  [the security page](docs/guide/security.md#reporting-a-vulnerability).
+- Security problems: do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

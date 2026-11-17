@@ -131,9 +131,11 @@ calls) are preserved by every decision below.
   - `heuristic`: a deterministic rule-based implementation of every stage contract. It is the
     default, so installs work offline (CI, demos, air-gapped). It is not a stub: its output is
     validated exactly like a model's.
-  - `anthropic`: the official `anthropic` SDK (2.x). `messages.parse(output_format=<schema>)`
-    handles structured stages, effort is set per stage, the default model is
-    `claude-opus-5-5`, and server-side refusal fallbacks are enabled by default.
+  - `anthropic`: the official `anthropic` SDK (2.x). Since 1.2.0, structured stages send the
+    stage schema as `output_config.format` through `messages.create`, because
+    `messages.parse` raised before the stop reason and usage could be read. Effort is set per
+    stage, the default model is `claude-opus-5-5`, and server-side refusal fallbacks are
+    enabled by default.
   - `openai`: any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure OpenAI, Ollama,
     vLLM, LM Studio, LiteLLM, OpenRouter, ...) over plain HTTP, with no vendor SDK. It asks
     for `json_schema` output and falls back to plain JSON mode with the schema in the prompt,
@@ -217,7 +219,8 @@ calls) are preserved by every decision below.
   never gets a shell, the network, or SCM credentials. The platform clones, removes the
   remote, re-runs the checks authoritatively, applies diff gates (protected paths, secrets on
   added lines only, empty diffs), commits as the bot, pushes, and opens the PR. Concurrency is
-  capped per project, and tasks touching the same files are serialized through `RetryLater`.
+  capped per project, and tasks touching the same files are serialized through `RetryLater`. (Since 1.0.0 the `openai` and `heuristic` agents use the same tool set and
+  dispatcher; see ADR-007.)
 - **Sandbox backends and policy.** `docker` is the default: one container per command with
   `--network none`, a read-only root, `--cap-drop ALL`, `no-new-privileges`, a non-root user,
   CPU/memory/pid limits and only the checkout mounted. `local` is an unconfined subprocess for
@@ -267,7 +270,8 @@ calls) are preserved by every decision below.
   (`viewer`, `reviewer`, `admin`, `service`). Every row is tenant-scoped, and cross-tenant
   access returns 404. Read access requires a human role; a `service` key, which ships with log
   collectors, can only push signals. The UI keeps the key in an HttpOnly, SameSite=Strict
-  cookie and also rejects cross-origin form posts. CSP is `default-src 'self'`.
+  cookie and also rejects cross-origin form posts. CSP is `default-src 'self'` (since 1.2.1,
+  `/docs` and `/redoc` get a looser policy for Swagger UI and ReDoc; see `docs/DECISIONS.md`).
 - **What a tenant is.** Tenancy isolates data. It is not a security boundary between hostile
   parties, because all tenants share the workers, and a tenant's admins configure what those
   workers fetch and run. See ADR-018 for the limits placed on that, and `docs/guide/security.md`
@@ -375,7 +379,7 @@ calls) are preserved by every decision below.
 - Leads age on every analysis run, including runs with no new data, so a lead can expire
   during an ingestion outage. Rejection thresholds compare each new batch of evidence with
   the evidence at rejection; they do not accumulate across batches.
-- The heuristic provider is rule-based. Real analysis quality comes from the Claude provider,
-  and has not been measured: there is no evaluation set yet.
+- The heuristic provider is rule-based. Real analysis quality comes from a real model (Claude
+  or an OpenAI-compatible one), and has not been measured: there is no evaluation set yet.
 - The GitHub integration is tested against mocked HTTP only. Loki and Prometheus run against
   real servers in CI ([compatibility matrix](docs/guide/compatibility.md)).

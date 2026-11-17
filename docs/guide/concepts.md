@@ -79,7 +79,7 @@ only in between), analyzers examine a checkout:
 | `python-ast` | Bare `except` and swallowed exceptions, mutable default arguments, `eval`, `yaml.load`, `subprocess` with a shell, SQL built from strings, HTTP calls without a timeout, queries inside loops |
 | `dependencies` | Unpinned dependencies; known vulnerabilities through OSV when enabled |
 | `compliance` | A missing license or one outside your allowlist; your own policy rules |
-| `coverage-gaps` | Modules without tests |
+| `coverage-gaps` | Modules without tests. Off by default: add `coverage` to the repository's `audit_types` |
 | `ruff`, `semgrep`, `gitleaks`, `trivy`, `osv-scanner` | Used automatically when the tool is installed on the worker; recorded as unavailable otherwise |
 
 A triage pass then filters likely false positives and calibrates confidence. A finding that
@@ -137,8 +137,9 @@ explicitly acknowledges it; `excluded` paths cannot be approved at all.
 
 Covered in [From approval to pull request](#from-approval-to-pull-request). After a human
 merges the PR, a verification job watches the task's original signals. If the log template or
-metric anomaly does not come back, and a later audit no longer reports the static finding, the
-task becomes `verified`; otherwise `regressed`, which returns it to review. A task merged again
+metric anomaly does not come back, and a later audit no longer reports the static finding (for
+a finding from a [check](checks.md), a later run of that check), the task becomes `verified`;
+otherwise `regressed`, which returns it to review. A task merged again
 after a regression is verified again. If no post-merge signals or audit arrive within 48 hours
 of the delay, the verification job fails (a dead job, with a notification); retry it from the
 *Jobs* page once data has arrived.

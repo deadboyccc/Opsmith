@@ -20,6 +20,8 @@ stored only as a hash.
 Authorization: Bearer osk_...
 ```
 
+The header `X-Opsmith-Key: osk_...` works too.
+
 Create keys with the CLI:
 
 ```bash
@@ -55,12 +57,13 @@ curl -s -H "Authorization: Bearer $KEY" $OPSMITH/api/v1/me
 # Create a project (settings are optional; see the Configuration page)
 curl -s -X POST $OPSMITH/api/v1/projects -H "Authorization: Bearer $KEY" \
   -H 'Content-Type: application/json' -d '{"name": "payments"}'
+# export PROJECT_ID=<the "id" in the response>
 
 # The review queue, highest score first
 curl -s -H "Authorization: Bearer $KEY" \
   "$OPSMITH/api/v1/projects/$PROJECT_ID/tasks?status=in_review"
 
-# Approve a task
+# Approve a task (export TASK_ID=<an "id" from the queue above>)
 curl -s -X POST $OPSMITH/api/v1/tasks/$TASK_ID/review -H "Authorization: Bearer $KEY" \
   -H 'Content-Type: application/json' -d '{"decision": "approve"}'
 
@@ -88,7 +91,7 @@ Paths are relative to `/api/v1`. "Read" means `viewer`, `reviewer` or `admin`.
 |---|---|---|
 | `POST /projects` | admin | Create a project. `409` if the name exists |
 | `GET /projects`, `GET /projects/{id}` | read | List or fetch projects |
-| `PATCH /projects/{id}/settings` | admin | Change settings. Top-level keys you send replace the stored ones; a nested object such as `budgets` is replaced as a whole |
+| `PATCH /projects/{id}/settings` | admin | Change settings. The body is `{"settings": {...}}`. Top-level keys you send replace the stored ones; a nested object such as `budgets` is replaced as a whole |
 | `POST /projects/{id}/repositories` | admin | Add a repository |
 | `POST /projects/{id}/services` | admin | Add a service |
 | `POST /projects/{id}/connectors` | admin | Add a connector |
@@ -110,7 +113,9 @@ Paths are relative to `/api/v1`. "Read" means `viewer`, `reviewer` or `admin`.
 | `GET /jobs?status=` | read | Queue jobs for the tenant |
 | `GET /audit-log?entity_id=` | read | The audit trail, newest first |
 
-List endpoints take `limit` (at least 1; each endpoint has a maximum between 500 and 2000).
+The run, execution, lead, finding, task, job and audit-log lists take `limit` (at least 1;
+each has a maximum between 500 and 2000). The lists of projects, repositories, services,
+connectors and schedules return everything.
 
 ### Decisions and operations
 
@@ -159,7 +164,7 @@ curl -s -X POST $OPSMITH/api/v1/connectors/$CONNECTOR_ID/push \
 | `timestamp`, `service`, `name`, `value` | yes | A value that is not a finite number (`NaN`, `Infinity`), or is beyond 1e150, is dropped and counted |
 | `environment`, `labels` | no | |
 
-Records are redacted before they are stored. A disabled connector refuses pushes. A
+Records are redacted before they are stored. A disabled connector refuses pushes with `409`. A
 timestamp within a day of year 1 or year 9999 is refused with `422`. A record whose service
 or environment name cannot be stored (too long, or holding a NUL) is left out of the batch;
 the response's `records` says how many were stored.
@@ -198,7 +203,7 @@ comes back to the queue.
 | `401` | Missing or invalid key |
 | `403` | The key's role may not do this |
 | `404` | No such object in your tenant |
-| `409` | Conflict: a duplicate name, a task that is not in a reviewable state, a stale `expected_version`, a job that is not dead |
+| `409` | Conflict: a duplicate name, a task that is not in a reviewable state, a stale `expected_version`, an approval its protected paths do not allow, a push to a disabled connector, a job that is not dead |
 | `400` | A `Content-Length` that is not a number |
 | `413` | A request body over 1 MiB (32 MiB for a push), or more than 10,000 records in one push |
 | `422` | Invalid input. The body lists what is wrong |

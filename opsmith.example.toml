@@ -34,6 +34,17 @@ max_concurrent_executions = 2
 # model = "claude-opus-5-5"
 # effort = "medium"
 
+# A check: your own review instruction, carried out by a model on a schedule. Needs a model
+# for the "check" stage (llm.stages.check); the offline rules record it as skipped. See
+# docs/guide/checks.md.
+[[projects.settings.checks]]
+name = "security-review"
+cron = "0 3 * * 1"                     # Mondays 03:00 UTC
+category = "security"                  # optional: every finding takes this category
+paths = ["app/**"]
+exclude = ["app/generated/**"]
+instructions = "Find injection, missing authorization checks and secrets written into the code."
+
 [[projects.repositories]]
 name = "payments-api"
 scm_provider = "github"

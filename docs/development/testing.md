@@ -8,6 +8,7 @@ come with.
 - [Writing a test](#writing-a-test)
 - [Continuous integration](#continuous-integration)
 - [Keeping the docs true](#keeping-the-docs-true)
+- [The documentation site](#the-documentation-site)
 - [Regenerating the UI screenshots and videos](#regenerating-the-ui-screenshots-and-videos)
 
 ## Running the tests
@@ -21,14 +22,14 @@ uv run pytest tests/test_llm.py -q  # one area while you iterate
 uv run pytest -k "budget" -q        # by name
 ```
 
-Five parts of the suite depend on something outside Python. Each skips itself, with a reason,
+Four parts of the suite depend on something outside Python. Each skips itself, with a reason,
 when that thing is missing:
 
 | What | How to run it | Needs |
 |---|---|---|
 | The default suite | `uv run pytest -q` | Nothing. SQLite, no network |
 | **PostgreSQL** | `OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db uv run pytest -q` | A server whose user may create databases. Every test gets its own database, dropped afterwards |
-| **Real sandbox containers** | `uv run pytest -m docker` | A Docker daemon and the `busybox:stable` and `python:3.12-slim` images |
+| **Real containers** | `uv run pytest -m docker` | A Docker daemon. The sandbox tests pull `busybox:stable` and `python:3.12-slim` themselves. The two scanner tests in `test_audits.py` need `zricethezav/gitleaks:v8.30.1` and `aquasec/trivy:0.76.2` already pulled, and skip otherwise |
 | **A live model endpoint** | `OPSMITH_TEST_OPENAI_BASE_URL=http://localhost:11434/v1 OPSMITH_TEST_OPENAI_MODEL=qwen2.5:1.5b uv run pytest tests/test_openai_provider.py -k live` | Any OpenAI-compatible server, for example Ollama with a small model |
 | **Real Loki and Prometheus** | `OPSMITH_TEST_LOKI_URL=http://127.0.0.1:3100 OPSMITH_TEST_PROMETHEUS_URL=http://127.0.0.1:9090 uv run pytest tests/test_connectors_live.py` | A Loki and a Prometheus with default settings, for example `docker run -p 3100:3100 grafana/loki:3.7.10` and `docker run -p 9090:9090 prom/prometheus:v3.16.0`. Either URL alone runs that half |
 
@@ -56,12 +57,12 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 | `test_provider_parity.py` | The same scenario through the OpenAI-compatible HTTP path; must end identically |
 | `test_hardening.py` | Adversarial tests: approval binding, diff-gate bypasses, sandbox escapes, queue and scheduler failure modes, roles, cross-tenant access, credentials, budgets |
 | `test_ingestion_hardening.py`, `test_ui_hardening.py` | The same for ingestion and for the UI |
-| `test_executor.py`, `test_review.py`, `test_aggregation.py`, `test_inference.py`, `test_audits.py`, `test_etl.py`, `test_connectors.py`, `test_redaction.py` | One per pipeline area |
+| `test_executor.py`, `test_review.py`, `test_aggregation.py`, `test_inference.py`, `test_audits.py`, `test_checks.py`, `test_etl.py`, `test_connectors.py`, `test_redaction.py` | One per pipeline area |
 | `test_llm.py`, `test_openai_provider.py` | The gateway and the two remote providers, against fake clients and a scripted endpoint |
 | `test_queue_scheduler.py`, `test_notifications.py`, `test_scm_tracking.py` | Infrastructure |
 | `test_api.py`, `test_cli.py` | The REST API, the UI routes and the command line |
 | `test_runtime.py` | What only a deployed process runs: the worker and scheduler loops (recovery after an error, stop signals), logging, the object store, the Docker sandbox's failure paths, provider plugins, the `alembic` command |
-| `test_migrations.py` | The schema migrations match the models; adopting 1.0.0 databases; refusing older and newer ones; concurrent starts on PostgreSQL |
+| `test_migrations.py` | The schema migrations match the models; adopting 1.0.0 databases; refusing older and newer ones; concurrent starts on SQLite and PostgreSQL |
 | `test_connectors_live.py` | The Loki and Prometheus connectors against real servers (skipped without them) |
 
 `conftest.py` provides the fixtures nearly every test uses:
@@ -75,7 +76,7 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 
 ## Writing a test
 
-- **Stay offline.** `httpx.MockTransport` for HTTP; fake clients for the Anthropic SDK; a
+- **Stay offline.** `httpx.MockTransport` for HTTP; the real Anthropic SDK over `httpx.MockTransport`; a
   scripted endpoint (`Server` in `test_openai_provider.py`) for OpenAI-compatible calls.
 - **Test the failure path too.** For anything that guards safety (approval, sandbox, redaction,
   tenancy, roles, budgets), write a test that tries the bad path and shows it is blocked. Add
@@ -90,11 +91,11 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+`.github/workflows/ci.yml` runs on every push to `main` and on every pull request:
 
 | Job | Does |
 |---|---|
-| `lint, types, tests` | ruff, format check, mypy, the documentation check, the suite with coverage. Docker is available, so the container tests run. Fails if coverage falls below the floor (`fail_under` in `pyproject.toml`) |
+| `lint, types, tests` | ruff, format check, mypy, the documentation check, the suite with coverage. Docker is available, so the sandbox container tests run. The gitleaks and trivy container tests skip, because CI does not pull their images. Fails if coverage falls below the floor (`fail_under` in `pyproject.toml`) |
 | `dependency audit` | `make audit`: every locked dependency, extras included, checked against the advisory databases with `pip-audit`. A new advisory turns the next build red |
 | `full suite on PostgreSQL` | The whole suite with `OPSMITH_TEST_DATABASE_URL` set |
 | `loki …`, `prometheus …` | One job per server version in the [compatibility matrix](../guide/compatibility.md): starts that server and runs `tests/test_connectors_live.py` against it |
@@ -114,8 +115,9 @@ through the gateway, the tool-calling agent loop). It runs once a week and on de
 make docs        # or: uv run python scripts/check_docs.py
 ```
 
-The check fails when a relative link or heading anchor is broken, when the security pages cite
-a test that does not exist, or when the code offers something the docs do not mention: an
+The check fails when a relative link or heading anchor is broken, when
+`docs/guide/security.md` or `docs/development/review-response.md` cites a test that does not
+exist (test names in `docs/SECURITY-AUDIT.md` are not checked), or when the code offers something the docs do not mention: an
 environment variable, a project setting, an API endpoint, a notification event, a connector
 type, an analyzer, a task or lead state, a model provider, a coding agent, a CLI command or a
 job kind. So adding a setting or an endpoint without documenting it breaks the build.

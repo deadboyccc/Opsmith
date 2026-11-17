@@ -58,8 +58,8 @@ missing input validation at the edges, and logging that could leak personal data
 | `cron` | `0 3 * * *` | When it runs, in UTC; the same five-field format as `audit_cron` (see [every few hours](#every-few-hours)) |
 | `enabled` | `true` | A disabled check is not scheduled, but can still be run by hand to try it out |
 | `category` | none | Every finding takes this category (`fix`, `security`, `performance`, `compliance`, `refactor`, `observability`, `dependency`). Without it, the model picks one per finding |
-| `repositories` | all | Names of the project's repositories to run on |
-| `paths` | `["**"]` | Globs of the files to read, relative to the repository root. `src` also covers everything below it |
+| `repositories` | all | Names of the project's repositories to run on. Names are not checked: one that matches no repository runs nowhere |
+| `paths` | `["**"]` | Globs of the files to read, relative to the repository root, matched like [protected paths](configuration.md#protected-paths): `*` also matches `/`, so `*.py` covers every Python file, and `src` covers everything below it |
 | `exclude` | none | Globs of files to leave out |
 | `max_files` | 200 | Files read per run, 1 to 2,000 |
 | `max_chars` | 400,000 | Characters of code read per run, 1,000 to 4,000,000 |
@@ -86,10 +86,11 @@ with a message.
 3. The files go to the model of the `check` stage, about 120,000 characters per call, with
    every line numbered. Your instruction goes with them in a block of its own. The code is
    framed as data, so text in a file cannot pose as an instruction.
-4. Every reported problem must quote the file it names: one to five lines copied from it. The
-   quote is looked up in the file, and its location becomes the finding's line. A problem
-   whose quote is not in that file, or that names a file the model was not given, is
-   discarded and counted on the run.
+4. Every reported problem must quote the file it names. The model is asked for one to five
+   lines copied from it; a quote of up to 20 lines and at least six characters is accepted.
+   The quote is looked up in the file, with whitespace and blank lines ignored, and its
+   location becomes the finding's line. A problem whose quote is not in that file, or that
+   names a file the model was not given, is discarded and counted on the run.
 5. The findings that are kept go to aggregation, which turns them into tasks for review,
    merges them with runtime evidence that points at the same code, and suppresses problems
    you rejected or fixed recently.
@@ -97,6 +98,7 @@ with a message.
 ## Running a check now
 
 ```bash
+# $OPSMITH: Opsmith's address; $KEY: an admin key; $PROJECT: the project id
 curl -X POST "$OPSMITH/api/v1/projects/$PROJECT/trigger" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"job": "check", "target_id": "<repository id>", "check": "security-review"}'
@@ -124,14 +126,19 @@ before it found, and is recorded as `budget_exceeded`.
 
 - **Tasks** in the review queue. Their findings name the check as their source
   (`check:security-review`) and carry the quoted code and the suggested fix.
-- **Runs** in `GET /projects/{id}/audit-runs`, with `mode` `check` and `audit_types`
-  `["check:<name>"]`. A run records the model, the files read, how many were left out by the
-  limits, how many findings were discarded and why, and the model's own notes.
+- **Runs** in `GET /api/v1/projects/{id}/audit-runs`, with `mode` `check` and `audit_types`
+  `["check:<name>"]`. The run's `tool_versions` field records the model, the number of parts,
+  the files left out by the limits (`files_over_limit`) or unreadable (`files_unreadable`),
+  the findings discarded and why (`dropped`), and the model's `notes`.
+- **After a merge**, a task from a check is verified by the next run of the same check: if
+  that run no longer reports the problem, the task becomes `verified`, otherwise
+  `regressed`. A regular audit or another check does not count, because neither carries out
+  this check's instruction.
 - **The audit log**: `check.completed`, `check.skipped` or `check.failed`.
 
 | Run status | Meaning |
 |---|---|
-| `succeeded` | The check ran on every file in scope |
+| `succeeded` | Every part was sent to the model and answered. Files past `max_files` or `max_chars` were not read; their number is on the run (`files_over_limit`) |
 | `skipped` | Nothing was checked: no model can follow the instruction, or no readable file matches `paths`. The reason is in `error` |
 | `failed` | A model call failed; findings from the parts before it are kept |
 | `budget_exceeded` | A budget cap stopped the run; findings from the parts before it are kept |

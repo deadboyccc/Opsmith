@@ -133,7 +133,9 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
 - **Connector URLs can reach your private network.** Loki and Prometheus usually live there, so
   private and loopback addresses are allowed. Link-local addresses (cloud metadata endpoints)
   are refused. DNS rebinding is not defended against. The same holds for a GitHub
-  repository's https address, which may name any host (GitHub Enterprise).
+  repository's https address, which may name any host; the repository's token is sent to that
+  host on clone and push. GitHub Enterprise Server is still not supported: API calls always go
+  to `api.github.com`.
 - **A signal named by the model is trusted.** Evidence references are checked against what
   the model was shown; the `signal` of a finding is not. A finding with valid evidence and an
   invented signal is verified, after its fix is merged, against a signal that never recurs.
@@ -168,8 +170,14 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
 - **A capable model can still be misled** by text in logs or code into proposing a bad task.
   The defence is structural: it can only produce findings, which a human must approve, which
   become a pull request a human must merge.
-- **`/healthz` and `/metrics` are unauthenticated.** Keep the API port private.
-- **API keys are bearer credentials** with no expiry or rotation yet. SSO is future work.
+- **`/healthz` and `/metrics` are unauthenticated.** Keep the API port private. Under
+  `OPSMITH_BASE_PATH` they are also served at the root; route only the base path through your
+  proxy, and block its `/metrics` and `/healthz` (see [Deployment](deployment.md)).
+- **API keys are bearer credentials** with no expiry, no rotation and no command to revoke one
+  yet. To cut a key off, mark its user inactive in the database
+  (`UPDATE users SET active = false WHERE id = 'usr_...'`; `SELECT id, name, role FROM users`
+  lists the ids); it is refused from the next request. That change bypasses the audit log.
+  SSO is future work.
 
 ## Hardening checklist
 
@@ -177,8 +185,8 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
 - [ ] `OPSMITH_SANDBOX_BACKEND=docker` (the default) on every worker that handles real
       repositories; the worker runs as a non-root user on a dedicated host or VM.
 - [ ] The sandbox image contains your toolchain and dependencies, and nothing secret.
-- [ ] The GitHub token is fine-grained: contents and pull requests read/write, checks read, on
-      the needed repositories only. The default branch is protected.
+- [ ] The GitHub token is fine-grained: contents and pull requests read/write, checks and
+      commit statuses read, on the needed repositories only. The default branch is protected.
 - [ ] `OPSMITH_LOCAL_ROOT` is unset unless you use file connectors or local repositories.
 - [ ] `OPSMITH_LLM_PROVIDER_ALLOWLIST` lists only the providers you intend to use, and
       `OPSMITH_OPENAI_BASE_URL` points where you mean it to.

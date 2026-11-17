@@ -174,8 +174,8 @@ check was changed to compile in memory, and the behaviour is called out in the u
 
 Listed with reasons in [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md#open-findings): the model's
 own `signal` being trusted, no rate limiting in the application, shared tenancy, private
-hosts as addresses, and the CPU cost of template mining. (Actions pinned by tag was fixed in
-1.2.3.)
+hosts as addresses, the CPU cost of template mining, and API keys that do not expire. (Actions
+pinned by tag was fixed in 1.2.3.)
 
 ## Tests and CI (1.2.3)
 
@@ -449,3 +449,26 @@ agent), so a check adds a way to find problems and no new way to change code.
 - **Trusting the model's line numbers.** Models count lines poorly; the quote is the evidence.
 - **A separate run table.** It would need a migration, its own immutability guard and its own
   API, for the same columns `AuditRun` has.
+
+## A review of every page, and what it turned up (1.5.2)
+
+Three reviewers read every page against the code, read-only, and each finding was checked
+before it was applied. Three findings were bugs rather than wording, and were fixed test
+first:
+
+- **Health and metrics at the root under a base path.** Options were to change the image's
+  health check to include the path, or to serve the two endpoints at the root as well. The
+  root is where health checks, Compose's `service_healthy` and Prometheus look, and a proxy
+  that routes only the base path never exposes them, so the root was chosen. The copies under
+  the path stay, as since 1.4.0; the deployment guide shows how to block them at the proxy.
+- **Which later run judges a static finding.** An audit finding is judged by a later regular
+  audit, a check finding by a later run of the same check. A check does not run the
+  analyzers, and an audit does not carry out a check's instruction, so either judging the
+  other would declare a problem gone without looking.
+- **Unknown keys in the configuration file.** Refusing them can break an apply that used to
+  pass; that apply was already wrong, silently. The changelog's upgrade notes say so.
+
+The security policy keeps reports private (GitHub's private vulnerability reporting, or
+email), as the security guide already said, because a public issue would announce an unfixed
+vulnerability. Private reporting must be switched on in the repository settings by an admin.
+

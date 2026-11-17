@@ -5,6 +5,10 @@ covers what was looked for, what was found, what was fixed in 1.2.2 and what is 
 The standing description of what Opsmith guarantees, and which test proves each guarantee,
 is [Security](guide/security.md); this page is the record of one audit.
 
+It does not cover code added after 1.2.1: the VictoriaLogs connector and serving under a base
+path (1.4.0), and checks (1.5.0, ADR-019), which send an administrator's instruction to the
+model.
+
 - [Scope and method](#scope-and-method)
 - [Summary](#summary)
 - [Fixed in 1.2.2](#fixed-in-122)
