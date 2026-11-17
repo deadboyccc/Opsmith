@@ -25,6 +25,7 @@ from opsmith.scm.base import (
     SCMError,
     SCMProvider,
     check_pushable,
+    check_repository,
 )
 
 _LOCK = threading.Lock()
@@ -65,22 +66,24 @@ class LocalSCM(SCMProvider):
         self._state_file(repo).write_text(json.dumps(prs, indent=2))
 
     def checkout(self, repo: Repository, dest: Path) -> Path:
+        check_repository(repo)
         url = self._source(repo)
         if (dest / ".git").exists():
-            run_git(["fetch", url, repo.default_branch], dest)
+            run_git(["fetch", "--", url, f"refs/heads/{repo.default_branch}"], dest)
             run_git(["reset", "--hard", "FETCH_HEAD"], dest)
             run_git(["clean", "-fdx"], dest)
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            run_git(["clone", "--branch", repo.default_branch, url, str(dest)])
+            run_git(["clone", "--branch", repo.default_branch, "--", url, str(dest)])
         return dest
 
     def push_branch(
         self, repo: Repository, workdir: Path, branch: str, *, git_dir: Path | None = None
     ) -> None:
+        check_repository(repo)
         check_pushable(repo, branch)
         run_git(
-            ["push", "--force", self._source(repo), f"HEAD:refs/heads/{branch}"],
+            ["push", "--force", "--", self._source(repo), f"HEAD:refs/heads/{branch}"],
             workdir,
             git_dir=git_dir,
         )

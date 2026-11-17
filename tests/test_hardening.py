@@ -1104,3 +1104,90 @@ def test_a_directory_pattern_protects_the_directory_however_it_is_spelled(patter
 def test_a_protected_path_pattern_that_can_never_match_is_refused(pattern: str) -> None:
     with pytest.raises(ValidationError):
         ProjectSettings(protected_paths=[{"pattern": pattern, "mode": "excluded"}])
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"url": "/srv/other-tenant/repo"},  # a path on the worker
+        {"url": "file:///srv/other-tenant/repo"},
+        {"url": "ssh://git@github.com/acme/r.git"},
+        {"url": "http://github.com/acme/r.git"},  # the token would travel in clear text
+        {"url": "https://user:pass@github.com/acme/r.git"},
+        {"url": "--upload-pack=touch /tmp/pwned"},
+        {"url": "ext::sh -c 'touch /tmp/pwned'"},
+        {"default_branch": "--upload-pack=touch /tmp/pwned"},
+        {"default_branch": "-x"},
+        {"default_branch": "a..b"},
+        {"default_branch": "main lock"},
+        {"default_branch": "main\n"},
+    ],
+)
+def test_a_github_repository_must_be_an_https_url_and_a_plain_branch(
+    client, seed, fields: dict[str, str]
+) -> None:
+    """Both values go to ``git`` on the worker. Unchecked, a ``github`` repository could name
+    a directory on the worker (reading any repository there, past ``OPSMITH_LOCAL_ROOT``), and
+    a branch such as ``--upload-pack=<command>`` ran that command on the next fetch."""
+    body = {"name": "r2", "url": "https://github.com/acme/r2.git", **fields}
+    url = f"/api/v1/projects/{seed.project.id}/repositories"
+    assert client.post(url, json=body, headers=_h(seed)).status_code == 422
+
+
+def test_the_github_provider_refuses_a_stored_repository_it_must_not_fetch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Rows written before the check existed, or by other means, never reach ``git``."""
+    from opsmith.scm import GitHubSCM  # noqa: PLC0415
+
+    monkeypatch.setenv("GH_TEST_TOKEN", "ghs_testtoken")
+    victim = _git_repo(tmp_path / "victim")
+    marker = tmp_path / "pwned"
+    scm = GitHubSCM()
+
+    def repo(**fields: Any) -> Repository:
+        values = {
+            "id": "repo_x",
+            "tenant_id": "t",
+            "project_id": "p",
+            "name": "x",
+            "scm_provider": "github",
+            "url": "https://github.com/acme/x.git",
+            "credentials_ref": "env:GH_TEST_TOKEN",
+            "default_branch": "main",
+            **fields,
+        }
+        return Repository(**values)
+
+    with pytest.raises(SCMError, match="https"):
+        scm.checkout(repo(url=str(victim)), tmp_path / "dest1")
+    assert not (tmp_path / "dest1").exists()
+    # The second audit of a repository fetches into the existing checkout.
+    dest = tmp_path / "dest2"
+    run_git(["clone", "-q", str(victim), str(dest)])
+    hostile = repo(url=str(victim), default_branch=f"--upload-pack=touch {marker};")
+    with pytest.raises(SCMError):
+        scm.checkout(hostile, dest)
+    with pytest.raises(SCMError, match="branch"):
+        scm.checkout(repo(default_branch=f"--upload-pack=touch {marker};"), dest)
+    assert not marker.exists()
+
+
+def test_a_local_repository_branch_cannot_be_a_git_option(platform, seed, tmp_path: Path) -> None:
+    marker = tmp_path / "pwned"
+    _set_repo(platform, seed, default_branch=f"--upload-pack=touch {marker};")
+    with platform.db.session() as s, pytest.raises(SCMError, match="branch"):
+        platform.audits.run(s, seed.repo.id, mode="full")
+    assert not marker.exists()
+
+
+def test_apply_checks_a_repository_like_the_api_does(tmp_path: Path) -> None:
+    from opsmith.configfile import _validate_repository  # noqa: PLC0415
+
+    for bad in (
+        {"scm_provider": "github", "url": "/srv/repo"},
+        {"scm_provider": "github", "url": "https://github.com/a/b.git", "default_branch": "-x"},
+        {"scm_provider": "local", "url": "/srv/repo", "default_branch": "--upload-pack=x"},
+    ):
+        with pytest.raises(ConfigError):
+            _validate_repository({"name": "r", **bad}, "repository r")

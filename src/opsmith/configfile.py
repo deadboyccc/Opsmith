@@ -16,6 +16,7 @@ from opsmith.connectors import available_types
 from opsmith.models import Connector, Project, Repository, Service, Tenant
 from opsmith.scheduler import ensure_project_schedules
 from opsmith.schemas import YEAR_HOURS, YEAR_SECONDS, ProjectSettings
+from opsmith.scm.base import branch_problem, remote_problem, repository_problem
 
 _REPO_FIELDS = {
     "scm_provider",
@@ -94,6 +95,12 @@ def _validate_repository(data: dict[str, Any], what: str) -> None:
     if data.get("scm_provider", "local") not in ("local", "github"):
         raise ConfigError(f"{what}: scm_provider must be 'local' or 'github'")
     _check_text(data, "repository", what)
+    provider = data.get("scm_provider", "local")
+    problem = branch_problem(data.get("default_branch", "main"))
+    if problem is None and "url" in data:
+        problem = remote_problem(provider, data["url"])
+    if problem:
+        raise ConfigError(f"{what}: {problem}")
     if "audit_types" in data:
         _check_strings(data["audit_types"], "audit_types", what)
     bad = set(data.get("audit_types", [])) - set(AUDIT_TYPES)
@@ -167,6 +174,12 @@ def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list
                 session.add(repo)
             for key, value in _pick(rdata, _REPO_FIELDS, what).items():
                 setattr(repo, key, value)
+            # The row as it will be stored, whichever of its fields this file sets.
+            problem = repository_problem(
+                repo.scm_provider or "local", repo.url, repo.default_branch or "main"
+            )
+            if problem:
+                raise ConfigError(f"{what}: {problem}")
             session.flush()
             repos[repo.name] = repo
 

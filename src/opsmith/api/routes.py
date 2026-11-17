@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 
 from opsmith import audit_log, queue
@@ -44,6 +44,7 @@ from opsmith.provenance import task_provenance
 from opsmith.review import ReviewError, ReviewRequest
 from opsmith.scheduler import CronExpr, ensure_project_schedules, reschedule
 from opsmith.schemas import MAX_CRON_CHARS, YEAR_HOURS, YEAR_SECONDS, ProjectSettings
+from opsmith.scm.base import repository_problem
 
 router = APIRouter(prefix="/api/v1")
 # Any authenticated principal, including machine `service` keys (used only by /me).
@@ -92,6 +93,13 @@ class RepositoryIn(_Strict):
     lint_command: _Command
     build_command: _Command
     audit_types: list[str] = Field(default_factory=lambda: list(AUDIT_TYPES[:5]))
+
+    @model_validator(mode="after")
+    def _safe_for_git(self) -> "RepositoryIn":
+        problem = repository_problem(self.scm_provider, self.url, self.default_branch)
+        if problem:
+            raise ValueError(problem)
+        return self
 
 
 class ServiceIn(_Strict):

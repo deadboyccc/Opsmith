@@ -21,7 +21,10 @@ from opsmith.scm.base import (
     SCMError,
     SCMProvider,
     check_pushable,
+    check_repository,
 )
+
+_PROTOCOLS = ("https",)  # the only transport git may use for a GitHub repository
 
 CHECK_RUNS_PER_PAGE = 100  # GitHub's maximum
 MAX_CHECK_RUN_PAGES = 10  # a bound on the requests one poll makes
@@ -79,30 +82,41 @@ class GitHubSCM(SCMProvider):
 
     # ------------------------------------------------------------------ git
     def checkout(self, repo: Repository, dest: Path) -> Path:
+        check_repository(repo)
         token = self._token(repo)
+        branch = repo.default_branch
         if (dest / ".git").exists():
-            run_git(["fetch", "--depth", "200", repo.url, repo.default_branch], dest, token=token)
+            # "--" ends the options: what follows is an address and a ref, whatever it says.
+            run_git(
+                ["fetch", "--depth", "200", "--", repo.url, f"refs/heads/{branch}"],
+                dest,
+                token=token,
+                protocols=_PROTOCOLS,
+            )
             run_git(["reset", "--hard", "FETCH_HEAD"], dest)
             run_git(["clean", "-fdx"], dest)
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             run_git(
-                ["clone", "--depth", "200", "--branch", repo.default_branch, repo.url, str(dest)],
+                ["clone", "--depth", "200", "--branch", branch, "--", repo.url, str(dest)],
                 token=token,
+                protocols=_PROTOCOLS,
             )
         return dest
 
     def push_branch(
         self, repo: Repository, workdir: Path, branch: str, *, git_dir: Path | None = None
     ) -> None:
+        check_repository(repo)
         check_pushable(repo, branch)
         # Forced: the branch belongs to Opsmith, and a retry after a failed PR creation must be
         # able to replace the commit an earlier attempt pushed.
         run_git(
-            ["push", "--force", repo.url, f"HEAD:refs/heads/{branch}"],
+            ["push", "--force", "--", repo.url, f"HEAD:refs/heads/{branch}"],
             workdir,
             token=self._token(repo),
             git_dir=git_dir,
+            protocols=_PROTOCOLS,
         )
 
     # ------------------------------------------------------------------ pull requests
