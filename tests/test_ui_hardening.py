@@ -359,6 +359,20 @@ def test_the_api_and_its_reference_work_under_the_base_path(mounted, seed) -> No
     assert mounted.get("/opsmith/openapi.json").status_code == 200
 
 
+def test_health_and_metrics_stay_at_the_root_under_a_base_path(mounted) -> None:
+    """The image's health check, Compose's ``service_healthy`` and Prometheus ask the root.
+    Under a base path they got 404, so the API container was unhealthy and the worker and
+    scheduler, which wait for it, never started. They stay under the path too (1.4.0)."""
+    for path in ("/healthz", "/opsmith/healthz"):
+        resp = mounted.get(path)
+        assert resp.status_code == 200, path
+        assert resp.json()["status"] == "ok"
+    for path in ("/metrics", "/opsmith/metrics"):
+        resp = mounted.get(path)
+        assert resp.status_code == 200, path
+        assert resp.headers["content-type"].startswith("text/plain")
+
+
 @pytest.mark.parametrize("value", ["opsmith", "/opsmith/", "/ops mith", "/../x", "/a?b", "//x"])
 def test_a_base_path_must_be_a_plain_path(value: str) -> None:
     from pydantic import ValidationError  # noqa: PLC0415

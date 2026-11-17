@@ -98,8 +98,22 @@ def create_app(platform: Platform | None = None) -> FastAPI:
     def at_base() -> Response:
         return RedirectResponse(f"{base}/ui", status_code=303)
 
+    # Health checks and Prometheus ask the root, and a proxy that routes only the base path
+    # never exposes these copies. They are also served under the path, as since 1.4.0.
+    outer.add_api_route("/healthz", lambda: _health(platform), include_in_schema=False)
+    outer.add_api_route("/metrics", _metrics, include_in_schema=False)
     outer.mount(base, app)
     return outer
+
+
+def _health(platform: Platform) -> dict[str, str]:
+    with platform.db.session() as s:
+        s.execute(text("SELECT 1"))
+    return {"status": "ok", "version": __version__}
+
+
+def _metrics() -> PlainTextResponse:
+    return PlainTextResponse(METRICS.render(), media_type="text/plain; version=0.0.4")
 
 
 def _application(platform: Platform) -> FastAPI:
@@ -129,13 +143,9 @@ def _application(platform: Platform) -> FastAPI:
 
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
-        with app.state.platform.db.session() as s:
-            s.execute(text("SELECT 1"))
-        return {"status": "ok", "version": __version__}
+        return _health(app.state.platform)
 
-    @app.get("/metrics", include_in_schema=False)
-    def metrics() -> PlainTextResponse:
-        return PlainTextResponse(METRICS.render(), media_type="text/plain; version=0.0.4")
+    app.add_api_route("/metrics", _metrics, include_in_schema=False)
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]

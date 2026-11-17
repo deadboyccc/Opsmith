@@ -6,6 +6,12 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Fixed
+
+- **Under `OPSMITH_BASE_PATH`, the Compose stack did not start.** `/healthz` moved under the
+  path, so the image's health check failed, and the worker and scheduler, which wait for a
+  healthy API, never started. `/healthz` and `/metrics` are now also served at the root.
+
 ## 1.5.1 - 2026-11-17
 
 ### Changed
