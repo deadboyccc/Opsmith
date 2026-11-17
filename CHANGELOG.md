@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.4.2 - 2026-11-17
+
 ### Fixed
 
 - **The secrets audit reported references as hardcoded credentials.** `${DB_PASSWORD}`,
