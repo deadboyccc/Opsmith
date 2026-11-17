@@ -216,3 +216,74 @@ def test_jwt_inside_a_hyphenated_run() -> None:
         "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
     )
     assert jwt not in redact_text(f"session-{jwt}")
+
+
+# --------------------------------------------------------------------------- security audit (1.2.2)
+
+import pytest  # noqa: E402 - the tests below are parametrized
+
+SECRET = "hunter2-very-secret-value"
+OPENAI_PROJECT_KEY = "sk-" + "proj-" + "A1b2C3d4" * 6
+PGP_BEGIN = "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+PGP_END = "-----END PGP " + "PRIVATE KEY BLOCK-----"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{\\"password\\": \\"' + SECRET + '\\"}',  # JSON inside a JSON string (queue bodies)
+        f"SMTP_PASS={SECRET}",
+        f"DB_PASS: {SECRET}",
+        f"mysqldump --pass={SECRET} db",
+        f"Authorization: Token {SECRET}",
+        f"authorization: {SECRET}",
+        f"Proxy-Authorization: Digest {SECRET}",
+        f"Cookie: sessionid={SECRET}",
+        f"set-cookie: sid={SECRET}; Path=/",
+        f"key {OPENAI_PROJECT_KEY} used",
+        f"{PGP_BEGIN}\nlQOYBF{SECRET}\n{PGP_END}",
+    ],
+)
+def test_credentials_in_common_spellings_are_masked(text: str) -> None:
+    """Near-misses of the existing detectors: each of these passed through unchanged."""
+    out = redact_text(text)
+    assert SECRET not in out
+    assert OPENAI_PROJECT_KEY not in out
+    assert "[REDACTED:" in out
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"cookies": {"sid": SECRET}},
+        {"tokens": [SECRET]},
+        {"passwords": {"old": SECRET}},
+        {"auth": {"pass": SECRET}},
+        {"db_pass": SECRET},
+        {"api_keys": [SECRET]},
+    ],
+)
+def test_credential_fields_are_masked_in_the_plural_and_the_short_form(record) -> None:
+    assert SECRET not in str(Redactor().redact(record))
+
+
+def test_ordinary_words_that_contain_pass_are_left_alone() -> None:
+    text = "bypass=enabled-for-admins compass: north-north-east passenger=41 pass rate 99%"
+    assert redact_text(text) == text
+    record = {"bypass": "enabled-for-admins", "compass": "north-north-east"}
+    assert Redactor().redact(record) == record
+
+
+def test_epoch_milliseconds_are_not_card_numbers() -> None:
+    """One 13-digit timestamp in ten passes the Luhn check and was masked as a credit card,
+    in text and as a number (``time`` in pino logs): the redaction count was inflated and the
+    log template changed from one line to the next."""
+    stamps = list(range(1_795_011_232_000, 1_795_011_232_200))
+    out, counts = Redactor().redact_text(" ".join(f"t={s}" for s in stamps))
+    assert counts["credit_card"] == 0
+    assert all(str(s) in out for s in stamps)
+    assert Redactor().redact({"time": stamps}) == {"time": stamps}
+    # Real card numbers still are, with and without separators, as text and as a number.
+    for card in ("4111111111111111", "5555 5555 5555 4444", "378282246310005", "6011111111111117"):
+        assert card not in redact_text(f"paid with {card} today")
+    assert Redactor().redact({"n": 4111111111111111}) == {"n": "[REDACTED:credit_card]"}

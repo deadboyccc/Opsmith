@@ -38,18 +38,34 @@ def _luhn_ok(number: str) -> bool:
     return total % 10 == 0
 
 
+def _card_shaped(number: str) -> bool:
+    """Whether a Luhn-valid number can be a payment card at all. Card numbers start with 2 to
+    6 (the networks' ranges), and a 13-digit one with 4. Without this, one 13-digit number in
+    ten is a "card": an epoch timestamp in milliseconds starts with 1 and passes Luhn that
+    often."""
+    digits = re.sub(r"\D", "", number)
+    return digits[:1] in "23456" and (len(digits) > 13 or digits[:1] == "4")
+
+
+def _is_card(number: str) -> bool:
+    return _luhn_ok(number) and _card_shaped(number)
+
+
 # Names whose value is a credential, as they appear at the end of a key: ``password``,
 # ``DB_PASSWORD``, ``"apiKey"``, ``AWS_SECRET_ACCESS_KEY``, ``x-auth-token`` ...
+# A bare ``pass`` counts only where it is a word of its own (``DB_PASS``, ``--pass``), not
+# inside ``bypass`` or ``compass``.
 _CREDENTIAL_KEY = (
-    r"(?:pass(?:word|wd|phrase)|pwd|secret(?:[_-]?access)?(?:[_-]?key)?|token|"
-    r"api[_-]?key|access[_-]?key|private[_-]?key)"
+    r"(?:pass(?:word|wd|phrase)|(?<![A-Za-z])pass|pwd|secret(?:[_-]?access)?(?:[_-]?key)?|"
+    r"token|api[_-]?key|access[_-]?key|private[_-]?key)"
 )
-# ``key = `` / ``"key": `` up to the value; the key may be quoted (JSON, dict reprs).
-_ASSIGN = _CREDENTIAL_KEY + r"[\"']?\s*[=:]\s*"
+# ``key = `` / ``"key": `` up to the value; the key may be quoted (JSON, dict reprs), and the
+# quote may be escaped (JSON carried inside a JSON string).
+_ASSIGN = _CREDENTIAL_KEY + r"\\?[\"']?\s*[=:]\s*"
 # Start of a URL scheme, pinned so a long dotted or hyphenated run is scanned once.
 _SCHEME = r"(?<![A-Za-z0-9+.\-])[a-zA-Z][a-zA-Z0-9+.\-]{0,31}://"
 # A structured field with one of these names holds a credential whatever its value looks like.
-_SENSITIVE_FIELD = re.compile(rf"(?i)(?:{_CREDENTIAL_KEY}|authorization|cookie)$")
+_SENSITIVE_FIELD = re.compile(rf"(?i)(?:{_CREDENTIAL_KEY}|authorization|cookie)s?$")
 _REDACTED_ONLY = re.compile(r"\[REDACTED:[a-z_0-9]+\]")
 _DIGITS = re.compile(r"\d+")
 
@@ -60,8 +76,9 @@ DETECTORS: tuple[Detector, ...] = (
     Detector(
         "private_key",
         re.compile(
-            r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S]){0,16384}?"
-            r"(?:-----END (?:[A-Z ]+ )?PRIVATE KEY-----|\Z)"
+            r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY(?: BLOCK)?-----"
+            r"(?:(?!-----BEGIN )[\s\S]){0,16384}?"
+            r"(?:-----END (?:[A-Z ]+ )?PRIVATE KEY(?: BLOCK)?-----|\Z)"
         ),
         secret=True,
     ),
@@ -73,7 +90,11 @@ DETECTORS: tuple[Detector, ...] = (
     ),
     Detector("slack_token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,200}\b"), secret=True),
     Detector("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,200}\b"), secret=True),
-    Detector("openai_style_key", re.compile(r"\bsk-[A-Za-z0-9]{32,200}\b"), secret=True),
+    Detector(
+        "openai_style_key",
+        re.compile(r"\bsk-(?:[A-Za-z0-9]{32,200}|(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,200})\b"),
+        secret=True,
+    ),
     Detector("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"), secret=True),
     Detector("stripe_key", re.compile(r"\b(?:sk|rk)_live_[0-9A-Za-z]{16,99}\b"), secret=True),
     # A header that starts mid-run (after a "-") is length-bounded, so a long hyphenated run
@@ -116,10 +137,27 @@ DETECTORS: tuple[Detector, ...] = (
         re.compile(r"(?i)\b(authorization[\"']?\s*[:=]\s*[\"']?basic\s+)([A-Za-z0-9+/=_\-]{8,})"),
         group=2,
     ),
+    # Any other Authorization scheme (Token, Digest, a raw value) and cookies, as headers are
+    # written in logs. The value is one token; a scheme word may come before it.
+    Detector(
+        "authorization_header",
+        re.compile(
+            r"(?i)\b((?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?(?:[A-Za-z]{2,20}\s+)?)"
+            r"([A-Za-z0-9_\-.=+/]{8,})"
+        ),
+        group=2,
+    ),
+    Detector(
+        "cookie",
+        re.compile(
+            r"(?i)\b((?:set-)?cookie[\"']?\s*[:=]\s*[\"']?[^\s=;\"']{1,64}=)([^\s;\"']{8,})"
+        ),
+        group=2,
+    ),
     # Quoted values first, so a value with spaces is masked whole rather than word by word.
     Detector(
         "credential_assignment",
-        re.compile(rf"(?i)({_ASSIGN}\")([^\"\n]{{6,512}})(?=\")"),
+        re.compile(rf"(?i)({_ASSIGN}\\?\")([^\"\n]{{6,512}}?)(?=\\?\")"),
         group=2,
     ),
     Detector(
@@ -189,7 +227,7 @@ def _mask_cards(run: str, counts: Counter[str]) -> str:
             whole_run = i == 0 and j == last
             card_like = sizes[j] >= 3  # every earlier group has 4+ digits, or we left the loop
             candidate = run[groups[i][0] : groups[j][1]]
-            if digits >= 13 and (whole_run or card_like) and _luhn_ok(candidate):
+            if digits >= 13 and (whole_run or card_like) and _is_card(candidate):
                 hit = j  # keep looking: a longer window wins
             if sizes[j] < 4 and not (i == 0 and whole_run_fits):
                 break  # no card-shaped window continues past a short group
@@ -271,7 +309,7 @@ class Redactor:
             redacted, c = self.redact_text(value)
             counts.update(c)
             return redacted
-        if isinstance(value, int) and _luhn_ok(str(abs(value))):
+        if isinstance(value, int) and _is_card(str(abs(value))):
             counts["credit_card"] += 1
             return "[REDACTED:credit_card]"
         return value
