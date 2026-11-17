@@ -47,6 +47,8 @@ _TEXT_LIMITS = {
     "branch_name": 200,
 }
 _LIST_LIMIT = 200
+_ITEM_LIMIT = 5_000  # one path or acceptance criterion
+_LONG_TEXT = 20_000  # a comment, an approach, an investigation question
 
 
 def valid_branch_name(name: str) -> bool:
@@ -88,11 +90,12 @@ class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["approve", "approve_with_edits", "reject", "defer", "request_investigation"]
-    comment: str = ""
+    comment: str = Field(default="", max_length=_LONG_TEXT)
     reason_code: str | None = Field(default=None, max_length=50)  # the column's size
-    edits: dict[str, Any] = Field(default_factory=dict)
+    edits: dict[str, Any] = Field(default_factory=dict, max_length=len(EDITABLE))
     elevated_ack: bool = False
-    investigation: str | None = None  # hypothesis/question for the next inference run
+    # hypothesis/question for the next inference run
+    investigation: str | None = Field(default=None, max_length=_LONG_TEXT)
     expected_version: int | None = None
 
 
@@ -238,9 +241,14 @@ class ReviewService:
             if key in edits and not (
                 isinstance(edits[key], list)
                 and len(edits[key]) <= _LIST_LIMIT
-                and all(isinstance(x, str) and x.strip() for x in edits[key])
+                and all(
+                    isinstance(x, str) and 0 < len(x.strip()) <= _ITEM_LIMIT for x in edits[key]
+                )
             ):
-                raise ReviewError(f"{key} must be a list of at most {_LIST_LIMIT} strings")
+                raise ReviewError(
+                    f"{key} must be a list of at most {_LIST_LIMIT} strings of at most "
+                    f"{_ITEM_LIMIT} characters"
+                )
         if "acceptance_criteria" in edits and not edits["acceptance_criteria"]:
             raise ReviewError("acceptance_criteria cannot be empty")
         if "paths" in edits and any(

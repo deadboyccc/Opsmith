@@ -285,7 +285,14 @@ class ProjectSettings(BaseModel):
     @field_validator("redaction_extra_patterns")
     @classmethod
     def _patterns(cls, value: list[str]) -> list[str]:
-        return [_valid_regex(p) for p in value]
+        for pattern in value:
+            if re.compile(_valid_regex(pattern)).search("") is not None:
+                # It would "redact" between every two characters of every text.
+                raise ValueError(
+                    f"redaction pattern {pattern!r} matches the empty string; "
+                    "it must match at least one character"
+                )
+        return value
 
 
 # --------------------------------------------------------------------------- LLM stage I/O

@@ -1205,3 +1205,95 @@ def test_the_validation_report_cannot_close_its_own_framing() -> None:
         report = text[len(user) :]
         assert report.count("</") == 1  # only the framing's own closing tag
         assert report.rstrip().endswith("Return corrected JSON only.")
+
+
+def test_file_connector_glob_cannot_climb_out_or_name_what_it_finds(tmp_path: Path) -> None:
+    """Only the part of a pattern before its first wildcard was checked against the local
+    root. A ``..`` after a wildcard was expanded first, and the refusal then quoted the file it
+    had found: names outside the root (other tenants' ids, secret file names) could be read
+    one pattern at a time, and a match that existed could be told from one that did not."""
+    from opsmith.connectors.files import confined_files  # noqa: PLC0415
+    from opsmith.localfs import LocalAccessError  # noqa: PLC0415
+
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "ok.jsonl").write_text("{}\n")
+    hidden = tmp_path / "outside" / "tenant-b"
+    hidden.mkdir(parents=True)
+    (hidden / "secret-name-xyz.jsonl").write_text("{}\n")
+    for pattern in (
+        f"{root}/*/../../outside/*/*.jsonl",  # matches a file outside the root
+        f"{root}/*/../../outside/*/nothing-*.jsonl",  # matches nothing
+        f"{root}/sub/../sub/*.jsonl",  # stays inside, and is refused all the same
+    ):
+        with pytest.raises(LocalAccessError) as refused:
+            confined_files(pattern, root, ())
+        assert "secret-name" not in str(refused.value)
+        assert "tenant-b" not in str(refused.value)
+    assert [p.name for p in confined_files(f"{root}/*/*.jsonl", root, ())] == ["ok.jsonl"]
+
+
+def test_a_request_body_over_the_limit_is_refused_before_it_is_read(client, seed) -> None:
+    """Bodies had no size limit and are read and parsed before the key is checked, so anyone
+    who could reach the port could have the process buffer a body of any size."""
+    from opsmith.api.app import MAX_BODY_BYTES, MAX_PUSH_BODY_BYTES  # noqa: PLC0415
+
+    big = b"[" + b" " * MAX_BODY_BYTES + b"]"
+    resp = client.post("/api/v1/projects", content=big)  # no key at all
+    assert resp.status_code == 413
+
+    # Without a Content-Length the bytes are counted as they arrive.
+    def chunks() -> Any:
+        for _ in range(MAX_BODY_BYTES // 65_536 + 2):
+            yield b" " * 65_536
+
+    assert client.post("/api/v1/projects", content=chunks()).status_code == 413
+    # Pushed signals may be larger, up to their own limit; ordinary requests are unaffected.
+    push = f"/api/v1/connectors/{seed.log_connector.id}/push"
+    padded = b"[" + b" " * (MAX_BODY_BYTES + 10) + b"]"
+    headers = {**_h(seed, "service"), "Content-Type": "application/json"}
+    assert client.post(push, content=padded, headers=headers).status_code == 202
+    assert MAX_PUSH_BODY_BYTES > MAX_BODY_BYTES
+    assert (
+        client.post("/api/v1/projects", json={"name": "small"}, headers=_h(seed)).status_code == 201
+    )
+
+
+def test_unknown_http_methods_share_one_metrics_label(client) -> None:
+    """The request method was a metric label as the client sent it, and the server accepts any
+    token as a method: every new one added series to ``/metrics`` for the life of the process,
+    without a key."""
+    for i in range(20):
+        client.request(f"X{i}AAAA", "/healthz")
+    metrics = client.get("/metrics").text
+    assert "X1AAAA" not in metrics
+    assert 'method="OTHER"' in metrics
+    assert 'method="GET"' in metrics
+
+
+def test_review_text_is_bounded(platform, seed) -> None:
+    with pytest.raises(ValidationError):
+        ReviewRequest(decision="defer", comment="x" * 20_001)
+    with pytest.raises(ValidationError):
+        ReviewRequest(decision="request_investigation", investigation="x" * 20_001)
+    with pytest.raises(ValidationError):
+        ReviewRequest(decision="approve_with_edits", edits={f"k{i}": 1 for i in range(50)})
+    task_id = make_task(platform, seed)
+    with platform.db.session() as s, pytest.raises(ReviewError, match="acceptance_criteria"):
+        platform.reviews.review(
+            s,
+            s.get(Task, task_id),
+            s.get(User, seed.reviewer.id),
+            ReviewRequest(
+                decision="approve_with_edits", edits={"acceptance_criteria": ["x" * 5_001]}
+            ),
+        )
+
+
+@pytest.mark.parametrize("pattern", ["", r"\d*", "a?", "(?:)", "x*|y"])
+def test_a_redaction_pattern_that_matches_nothing_at_all_is_refused(pattern: str) -> None:
+    """A pattern that matches the empty string "redacts" between every two characters: 14
+    characters of log text became 299."""
+    with pytest.raises(ValidationError):
+        ProjectSettings(redaction_extra_patterns=[pattern])
+    assert ProjectSettings(redaction_extra_patterns=[r"ACME-\d+"]).redaction_extra_patterns
