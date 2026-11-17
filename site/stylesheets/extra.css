@@ -1,0 +1,172 @@
+/* Opsmith documentation site. Colours come from the mascot and the social preview image:
+   forge orange on deep navy, with the robot's teal eyes as a highlight. Every colour is
+   defined for both schemes, and text keeps at least 4.5:1 contrast in each. */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #0b1120;
+  --md-primary-fg-color--light: #1e293b;
+  --md-primary-fg-color--dark: #050914;
+  --md-primary-bg-color: #f8fafc;
+  --md-primary-bg-color--light: #f8fafcb3;
+  --md-accent-fg-color: #c2410c; /* orange 700: readable on white */
+  --md-accent-fg-color--transparent: #c2410c1a;
+  --md-typeset-a-color: #c2410c;
+  --os-panel: #f1f5f9;
+  --os-panel-border: #e2e8f0;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 225;
+  --md-primary-fg-color: #0b1120;
+  --md-primary-fg-color--light: #1e293b;
+  --md-primary-fg-color--dark: #050914;
+  --md-primary-bg-color: #f8fafc;
+  --md-primary-bg-color--light: #f8fafcb3;
+  --md-default-bg-color: #0f172a;
+  --md-accent-fg-color: #fb923c; /* orange 400: readable on navy */
+  --md-accent-fg-color--transparent: #fb923c1a;
+  --md-typeset-a-color: #fdba74;
+  --os-panel: #111a33;
+  --os-panel-border: #1e293b;
+}
+
+/* The header logo is the mascot itself: a little larger than an icon. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.8rem;
+  width: auto;
+}
+
+/* ------------------------------------------------------------------ landing page */
+
+.os-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  margin: 0.5rem 0 1.5rem;
+}
+
+@media screen and (min-width: 45em) {
+  .os-hero {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 2.5rem;
+    margin-top: 1.5rem;
+  }
+}
+
+.md-typeset .os-hero h1 {
+  margin: 0.4rem 0 0.8rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--md-default-fg-color);
+  font-size: clamp(1.6rem, 1.1rem + 2.2vw, 2.4rem);
+  letter-spacing: -0.02em;
+}
+
+.os-hero__mascot {
+  display: block;
+  width: clamp(72px, 18vw, 112px);
+  height: auto;
+}
+
+.os-hero__art img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0.6rem;
+  border: 1px solid var(--os-panel-border);
+  box-shadow: 0 0.6rem 1.6rem #0b112033;
+}
+
+.md-typeset .os-hero .md-button {
+  margin: 0.3rem 0.4rem 0.3rem 0;
+}
+
+.md-typeset .os-rules {
+  padding: 0.8rem 1rem;
+  border-left: 0.25rem solid var(--md-accent-fg-color);
+  background: var(--os-panel);
+  border-radius: 0 0.4rem 0.4rem 0;
+}
+
+.md-typeset .os-rules p {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------ every page */
+
+/* Images never push the page sideways, whatever width an author gave them. */
+.md-typeset img,
+.md-typeset video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Wide diagrams scroll inside their box instead of widening the page. */
+.md-typeset .mermaid {
+  overflow-x: auto;
+}
+
+/* Long words and URLs in prose wrap on a phone instead of overflowing. */
+.md-typeset p,
+.md-typeset li,
+.md-typeset td {
+  overflow-wrap: anywhere;
+}
+
+.md-typeset code {
+  overflow-wrap: anywhere;
+}
+
+/* Comfortable tap targets in the navigation drawer on touch screens. */
+@media screen and (max-width: 76.1875em) {
+  .md-nav__link {
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+  }
+}
+
+/* ------------------------------------------------------------------ buttons */
+/* Material colours buttons with the primary colour, which here is the header's navy: on the
+   dark scheme that is the page's own colour. Buttons get the forge orange instead. */
+
+.md-typeset .md-button {
+  color: var(--os-button-fg);
+  border-color: var(--os-button-border);
+}
+
+.md-typeset .md-button--primary {
+  color: var(--os-button-primary-fg);
+  background-color: var(--os-button-primary-bg);
+  border-color: var(--os-button-primary-bg);
+}
+
+.md-typeset .md-button:focus,
+.md-typeset .md-button:hover {
+  color: var(--os-button-primary-fg);
+  background-color: var(--os-button-hover-bg);
+  border-color: var(--os-button-hover-bg);
+}
+
+[data-md-color-scheme="default"] {
+  --os-heading: #0b1120;
+  --os-button-fg: #0b1120;
+  --os-button-border: #0b1120;
+  --os-button-primary-fg: #ffffff;
+  --os-button-primary-bg: #c2410c; /* white on this: 5.2:1 */
+  --os-button-hover-bg: #9a3412;
+}
+
+[data-md-color-scheme="slate"] {
+  --os-heading: #f1f5f9;
+  --os-button-fg: #f1f5f9;
+  --os-button-border: #94a3b8;
+  --os-button-primary-fg: #0b1120;
+  --os-button-primary-bg: #fb923c; /* navy on this: 8.6:1 */
+  --os-button-hover-bg: #fdba74;
+}
+
+.md-typeset .os-hero h1 {
+  color: var(--os-heading);
+}

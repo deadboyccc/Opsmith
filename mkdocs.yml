@@ -1,0 +1,141 @@
+# The documentation site, published to GitHub Pages by .github/workflows/docs.yml.
+#
+# The pages are the repository's own Markdown files. scripts/build_site.py copies them into
+# build/site-src (adjusted for the web, see its docstring) together with site/, which holds
+# the landing page and the styles. Build or preview it with:
+#
+#   uv run --group docs python scripts/build_site.py --build
+#   uv run --group docs python scripts/build_site.py --serve
+site_name: Opsmith
+site_description: >-
+  Self-hosted engineering ops: production signals and code audits become ranked tasks, and a
+  sandboxed agent opens a pull request only after a human approves.
+site_url: https://deadboyccc.github.io/Opsmith/
+repo_url: https://github.com/deadboyccc/Opsmith
+repo_name: deadboyccc/Opsmith
+copyright: Opsmith is MIT licensed.
+docs_dir: build/site-src
+site_dir: build/site
+strict: true
+
+theme:
+  name: material
+  logo: docs/images/brand/mascot.svg
+  favicon: docs/images/brand/mascot.svg
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Follow the system setting
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/deadboyccc/Opsmith
+      name: Opsmith on GitHub
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # The anchors GitHub generates, so links written for GitHub work on the site too.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Overview: overview.md
+      - Getting started: docs/guide/getting-started.md
+      - UI tour: docs/guide/ui-tour.md
+      - Concepts: docs/guide/concepts.md
+  - Guide:
+      - Configuration: docs/guide/configuration.md
+      - Models: docs/guide/models.md
+      - Deployment: docs/guide/deployment.md
+      - Operations: docs/guide/operations.md
+      - API: docs/guide/api.md
+      - Compatibility: docs/guide/compatibility.md
+  - Security:
+      - Security: docs/guide/security.md
+      - Security audit: docs/SECURITY-AUDIT.md
+  - Development:
+      - Contributing: CONTRIBUTING.md
+      - Architecture: docs/development/architecture.md
+      - Testing: docs/development/testing.md
+      - Architecture decisions: ARCHITECTURE_DECISIONS.md
+      - Decisions: docs/DECISIONS.md
+      - Guide for AI agents (AGENTS.md): AGENTS.md
+      - Claude Code notes (CLAUDE.md): CLAUDE.md
+  - Project:
+      - Changelog: CHANGELOG.md
+      - Documentation index: docs/README.md
+      - Specification: docs/development/specification.md
+      - Independent project review: docs/development/independent-project-review.md
+      - Review response: docs/development/review-response.md
+      - Repository About text: docs/development/repository-about.md
+      - Work reports:
+          - reports/README.md
+          - Hardening and provider neutrality: reports/2026-11-16-hardening-and-provider-neutrality.md

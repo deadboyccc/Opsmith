@@ -2,7 +2,7 @@
 UV ?= uv
 DEV_IMAGE ?= opsmith-dev
 
-.PHONY: help setup lint fmt type test cov docs audit check demo run docker-dev docker-test clean
+.PHONY: help setup lint fmt type test cov docs audit site site-serve check demo run docker-dev docker-test clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -35,6 +35,12 @@ audit: ## Known vulnerabilities in the locked dependencies (needs network)
 	$(UV) tool run pip-audit==2.10.1 -r .audit-requirements.txt --require-hashes --disable-pip --progress-spinner off; \
 	  status=$$?; rm -f .audit-requirements.txt; exit $$status
 
+site: ## Build the documentation site into build/site (strict: a broken link fails it)
+	NO_MKDOCS_2_WARNING=1 $(UV) run --group docs python scripts/build_site.py --build
+
+site-serve: ## Preview the documentation site at http://127.0.0.1:8000 with live reload
+	NO_MKDOCS_2_WARNING=1 $(UV) run --group docs python scripts/build_site.py --serve
+
 check: lint type cov docs ## Everything CI runs offline (CI also runs `make audit`)
 
 demo: ## Offline end-to-end demo
@@ -50,4 +56,4 @@ docker-test: docker-dev ## Run lint, types and tests inside the dev image
 	docker run --rm $(DEV_IMAGE) sh -c "ruff check src tests scripts && ruff format --check src tests scripts && mypy && pytest -q --cov && python scripts/check_docs.py"
 
 clean: ## Remove local artifacts
-	rm -rf data opsmith-demo .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov
+	rm -rf data opsmith-demo build .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

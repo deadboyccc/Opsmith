@@ -20,7 +20,16 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {".git", ".venv", "node_modules", "opsmith-demo", "data", ".pytest_cache"}
+SKIP_DIRS = {
+    ".git",
+    ".venv",
+    "node_modules",
+    "opsmith-demo",
+    "data",
+    ".pytest_cache",
+    "build",  # the assembled documentation site
+    "site",  # its landing page; the site build checks those links (mkdocs --strict)
+}
 # The original specification and the outside review are kept as they were written.
 SKIP_FILES = {"docs/development/independent-project-review.md"}
 LINK = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|\!\[[^\]]*\]\(([^)\s]+)\)")
