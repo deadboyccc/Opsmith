@@ -20,7 +20,7 @@ Seven terms carry the whole system.
 | **Signal** | A normalized, redacted log event or metric point | `ERROR upstream timeout after 30000ms` |
 | **Bundle** | A compact summary of one service over one time window: log templates and metric anomalies, with references to the raw data. Sized to fit a model's context | 80 timeout errors, p95 latency up 590% |
 | **Lead** | An open question carried from one analysis run to the next until it is confirmed, refuted or expired | "Timeouts are recurring. Confirm next window." |
-| **Finding** | A problem with evidence, from analysis (runtime) or from an audit (static) | `httpx.post` without timeout at `app/payments.py:10` |
+| **Finding** | A problem with evidence, from analysis (runtime) or from an audit or a [check](checks.md) (static) | `httpx.post` without timeout at `app/payments.py:10` |
 | **Task** | One or more correlated findings, ranked P0 to P3, with an approach and acceptance criteria | "Add a timeout to the payment gateway call" |
 | **Review** | A human decision on a task, recorded with identity and time | approved by *Riley Reviewer* |
 | **Execution run** | One sandboxed attempt to implement an approved task and open a PR | branch `opsmith/performance/…`, PR #1 |

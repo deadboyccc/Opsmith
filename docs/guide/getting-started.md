@@ -246,6 +246,7 @@ Stop Opsmith with Ctrl+C when you are done. `rm -rf $LAB` removes everything thi
 |---|---|
 | Understand what just happened | [Concepts](concepts.md) |
 | Use a real model instead of the offline rules: Claude, OpenAI, or a local model | [Models](models.md) |
+| Have a model run your own review instructions on a schedule ("audit for bugs and performance issues") | [Checks](checks.md) |
 | Pull logs and metrics from Loki, Prometheus or files instead of pushing them | [Configuration](configuration.md#connectors) |
 | Work on GitHub repositories, with isolated execution | [Deployment](deployment.md) |
 | Know exactly what is guaranteed, and what is not | [Security](security.md) |

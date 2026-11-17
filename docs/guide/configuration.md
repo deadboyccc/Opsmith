@@ -96,7 +96,7 @@ osv_online = false                  # look up dependency vulnerabilities at osv.
 | `lead_max_carry` | 1 to 100 |
 | `audit_full_every_days` | 1 to 3650 |
 | `max_tasks_per_aggregation` | 1 to 1000 |
-| `audit_cron` | Five fields: minute, hour, day of month, month, day of week. Lists, ranges and steps are supported; names such as `MON` are not. An expression that can never fire (31 February) is rejected |
+| `audit_cron` | Five fields: minute, hour, day of month, month, day of week. Lists, ranges and steps are supported; names such as `MON` are not. An expression that can never fire (31 February) is rejected. A step restarts each day, so `*/7` in the hour field also fires at midnight, three hours after 21:00 |
 | `ingest_interval_seconds` | 60 to 31536000 (a year) |
 | `pr_poll_seconds` | 60 to 604800 (a week) |
 | `recently_closed_days` | 0 to 3650 |

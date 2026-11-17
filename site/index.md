@@ -60,6 +60,12 @@ one-minute video; here it is in thirty seconds:
   </video>
 </div>
 
+## Your own reviews, on a schedule
+
+Write a check in plain words, such as "audit this code for bugs and performance issues", and
+choose when it runs. A model carries it out, and every problem it can point to in the code
+becomes a task for review, under the same two rules. See [Checks](docs/guide/checks.md).
+
 ## Where to go next
 
 <div class="grid cards" markdown>
@@ -78,6 +84,7 @@ one-minute video; here it is in thirty seconds:
     ---
 
     - [Configuration](docs/guide/configuration.md) of projects, connectors and budgets
+    - [Checks](docs/guide/checks.md): your own review instructions, on a schedule
     - [Models](docs/guide/models.md): offline rules, any OpenAI-compatible endpoint, or Claude
     - [Deployment](docs/guide/deployment.md) with Compose and the sandbox
     - [Operations](docs/guide/operations.md): monitoring, upgrades, troubleshooting

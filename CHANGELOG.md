@@ -6,6 +6,14 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Changed
+
+- The landing page, the README, the concepts, getting started, UI tour and operations guides,
+  and `AGENTS.md` now describe checks. The Checks guide explains how to run one every few
+  hours (a cron step restarts each day), and the README's "what has been tested" table says
+  how far checks are tested: through the real gateway with a scripted model, not yet against
+  a live model in CI.
+
 ## 1.5.0 - 2026-11-17
 
 ### Added

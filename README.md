@@ -13,7 +13,9 @@
 It watches your logs, metrics and repositories, links what production shows to what the code
 shows, and ranks the result as engineering tasks. When a human approves a task, a sandboxed
 coding agent implements it and opens a pull request. After a human merges it, Opsmith checks
-that the original problem is actually gone.
+that the original problem is actually gone. You can also give it review instructions of your
+own, such as "audit this code for bugs and performance issues", which a model carries out on
+a schedule you choose ([checks](docs/guide/checks.md)).
 
 It is self-hosted and not tied to a model vendor: it runs offline with built-in rules, with
 Claude, or with any OpenAI-compatible endpoint, including local models served by Ollama or
@@ -216,6 +218,7 @@ Honest scope, so you can judge it:
 | VictoriaLogs | A scripted server in CI on every push; run by hand against a real VictoriaLogs 1.53 server. Not yet live in CI |
 | GitHub | Tested against **mocked HTTP** only. Not yet exercised against github.com in CI |
 | Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested with the **real Anthropic SDK over a mocked transport**, not against the Claude API |
+| Checks | Tested through the real gateway with a scripted model, including the adversarial cases (invented findings, code posing as the instruction, files that must not be sent). Not yet run against a live model in CI |
 | Production use | None yet. No load tests, no long-running deployment |
 
 There are no published quality metrics yet (precision of findings, share of pull requests

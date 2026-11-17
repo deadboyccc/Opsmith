@@ -67,7 +67,7 @@ Each attempt to implement an approved task: the agent, the branch, the checks an
 ## Configuration
 
 Connectors, repositories, services and schedules, and the project settings as JSON (editable by
-admins).
+admins), including the project's [checks](checks.md).
 
 ![Configuration](../images/ui-config.png)
 

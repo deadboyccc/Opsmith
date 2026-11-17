@@ -35,9 +35,9 @@ Every stage is a queued job.
   again after `OPSMITH_WORKER_LEASE_SECONDS`.
 - Stop a worker with `SIGTERM`. It finishes the job it is running first.
 - More than one scheduler is safe: a schedule slot is enqueued once however many ask.
-- A repository is audited by one job at a time. An audit that starts while another one of
-  the same repository is running is deferred by a minute (`another audit of this repository
-  is running`), because both would use the same checkout.
+- A repository is audited or checked by one job at a time. An audit or check that starts
+  while another one of the same repository is running is deferred by a minute (`another audit
+  of this repository is running`), because both would use the same checkout.
 - A `job.dead` notification goes to the channels of the project the job worked for, whatever
   the job's kind.
 
@@ -49,6 +49,7 @@ Things worth an alert:
 | `task.execution_failed` | An approved task did not become a pull request. The task is back in review with a report |
 | `inference.failed` | A model call failed or returned unusable output. See [Models](models.md#what-a-model-needs-to-be-able-to-do) |
 | `budget.exceeded` | A token or cost cap stopped a stage. Raise the cap or wait for the next day |
+| `check.failed` | A [check](checks.md) failed or did nothing: no model can follow it (the offline rules cannot), no file matches its paths, or a model call failed. The reason is on the run |
 | `lead.escalated` | The analysis could not decide about something for several runs. A person should look |
 | An audit run that shows an error on the dashboard | An analyzer or scanner failed. The run still records what the others found, and the next audit re-checks everything |
 

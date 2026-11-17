@@ -130,7 +130,7 @@ OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@localhost:5432/op
 | `redaction.py` | Secret/PII detectors shared by ETL, the gateway and the diff gate |
 | `llm/` | `LLMGateway` (the only path to a model), prompts, pricing, providers |
 | `inference/orchestrator.py` | Chained runs, lead carry/confirm/refute/expire |
-| `audits/` | Analyzers (built-in + external tools) and the audit runner |
+| `audits/` | Analyzers (built-in + external tools), the audit runner, and checks (`checks.py`): admin-written instructions a model carries out on the code (ADR-019) |
 | `aggregation/` | Correlation, dedup/suppression, scoring, task drafting |
 | `review.py` | Human review gate and the approval scope digest |
 | `executor/` | Sandboxes, workspace confinement, coding agents, execution service, PR body |

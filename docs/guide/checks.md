@@ -55,7 +55,7 @@ missing input validation at the edges, and logging that could leak personal data
 |---|---|---|
 | `name` | required | Identifies the check. Lower-case letters, digits and hyphens, up to 63 characters, unique in the project |
 | `instructions` | required | What to look for, in plain words. Up to 4,000 characters |
-| `cron` | `0 3 * * *` | When it runs, in UTC; the same five-field format as `audit_cron` |
+| `cron` | `0 3 * * *` | When it runs, in UTC; the same five-field format as `audit_cron` (see [every few hours](#every-few-hours)) |
 | `enabled` | `true` | A disabled check is not scheduled, but can still be run by hand to try it out |
 | `category` | none | Every finding takes this category (`fix`, `security`, `performance`, `compliance`, `refactor`, `observability`, `dependency`). Without it, the model picks one per finding |
 | `repositories` | all | Names of the project's repositories to run on |
@@ -64,6 +64,13 @@ missing input validation at the edges, and logging that could leak personal data
 | `max_files` | 200 | Files read per run, 1 to 2,000 |
 | `max_chars` | 400,000 | Characters of code read per run, 1,000 to 4,000,000 |
 | `max_findings` | 20 | Findings kept per run, 1 to 200; the most severe are kept |
+
+### Every few hours
+
+A cron runs at fixed times of the day, so "every *N* hours" is exact only when *N* divides 24:
+`0 */6 * * *` runs at 00:00, 06:00, 12:00 and 18:00. With 7, `0 */7 * * *` runs at 00:00, 07:00,
+14:00 and 21:00, and then again at midnight, three hours later. Use 1, 2, 3, 4, 6, 8 or 12 for an
+even rhythm, or list the hours yourself: `0 1,9,17 * * *`.
 
 A project can have up to 50 checks. Every value is checked when you save it: a bad cron, a
 blank instruction, a glob that leaves the repository (`../`) or a duplicate name is refused
