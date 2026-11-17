@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.4.3 - 2026-11-17
+
 ### Changed
 
 - **Session rules: release every change.** `AGENTS.md` and `CLAUDE.md` now require that each
