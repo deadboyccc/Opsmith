@@ -496,6 +496,63 @@ def test_secrets_every_hit_is_masked_and_reported(tmp_path: Path) -> None:
     assert by_line[1][0].snippet == 'KEYS = ("AKI***", "sk_***")'
 
 
+def test_secrets_a_reference_or_an_expression_is_not_a_hardcoded_credential(
+    tmp_path: Path,
+) -> None:
+    """A value read from the environment, a template or another variable is not committed;
+    a literal is, even as the default of a reference or unquoted in a config file."""
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "check.sh").write_text(
+        'DB_PASSWORD="${POSTGRES_PASSWORD}"\n'  # 1 a reference
+        "password=$DB_PASSWORD\n"  # 2 a reference
+        "secret=$(cat /run/secrets/app)\n"  # 3 a command substitution
+        'docker run -v "$PWD:/workspace" image\n'  # 4 the shell's working directory
+        "PASSWORD=hunter2secret\n"  # 5 a literal
+        'password="${DB_PASSWORD:-fallbackSecret1}"\n'  # 6 a literal default
+    )
+    (tmp_path / "application.yaml").write_text(
+        "password: ${SPRING_DATASOURCE_PASSWORD}\n"  # 1 a reference
+        "api-key: '{{ .Values.apiKey }}'\n"  # 2 a template
+        "client_secret: plainliteral123\n"  # 3 a literal, unquoted
+        "url: postgres://app:${DB_PASSWORD}@db/app\n"  # 4 a reference in a URL
+        "url: postgres://app:hunter5secret@db/app\n"  # 5 a literal in a URL
+    )
+    (tmp_path / "Account.java").write_text(
+        "this.password = password;\n"  # 1 a variable
+        'String secret = System.getenv("APP_SECRET");\n'  # 2 a call
+        'String password = "TopSecretPassw0rd";\n'  # 3 a literal
+        "int pwd = 12345678;\n"  # 4 a number is a literal
+        'String url = "jdbc:postgresql://db/app?password=hunter3secret";\n'  # 5 in a string
+        "// password = hunter4secret\n"  # 6 in a comment
+    )
+    (tmp_path / "auth.ts").write_text(
+        "const body = { email, password: form.password };\n"  # 1 an expression
+        "const apiKey = `AbCdEf123456`;\n"  # 2 a template literal
+    )
+    findings = SecretsAnalyzer().analyze(ctx_for(tmp_path))
+    assert sorted((f.path, f.line) for f in findings) == [
+        ("Account.java", 3),
+        ("Account.java", 4),
+        ("Account.java", 5),
+        ("Account.java", 6),
+        ("application.yaml", 3),
+        ("application.yaml", 5),
+        ("auth.ts", 2),
+        ("deploy/check.sh", 5),
+        ("deploy/check.sh", 6),
+    ]
+    secrets = ("hunter2secret", "fallbackSecret1", "plainliteral123", "TopSecretPassw0rd",
+               "hunter3secret", "hunter4secret", "hunter5secret")  # fmt: skip
+    for raw in secrets:
+        assert all(raw not in f.snippet for f in findings)
+
+
+def test_secrets_a_value_of_mask_characters_is_a_placeholder(tmp_path: Path) -> None:
+    (tmp_path / "Masking.java").write_text('static final String SECRET = "******";\n')
+    (finding,) = SecretsAnalyzer().analyze(ctx_for(tmp_path))
+    assert finding.extra["placeholder"] is True
+
+
 def test_secrets_short_values_show_no_prefix(tmp_path: Path) -> None:
     (tmp_path / "a.env").write_text("DATABASE_URL=postgres://app:pw1@db/prod\n")
     (finding,) = SecretsAnalyzer().analyze(ctx_for(tmp_path))

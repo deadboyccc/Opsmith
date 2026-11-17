@@ -379,3 +379,22 @@ locked" instead of waiting for the busy timeout, because waiting there could dea
 connection hook therefore retries the switch every 50 ms, for the same 30 seconds as the busy
 timeout, and only for that error; any other error, or the timeout, still fails the start. A
 file already in WAL mode is left alone, so this happens at most once per database.
+
+## The secrets audit and references (1.4.2)
+
+The first audit of a real code base (Java and TypeScript) drafted 50 credential tasks, and
+none was a committed secret: they were environment references, template variables, and
+variables in code. A review queue full of these teaches reviewers to approve without reading,
+which is worse than a missed finding.
+
+The audit (not redaction, and not the diff gate, which share the detectors) now skips a
+generic `credential_assignment` match when its value only names where the secret comes from:
+a whole `$NAME`, `${NAME}`, `$(...)` or `{{ ... }}`, or an unquoted identifier or call in a
+program-source file, outside any string and comment. The test is deliberately narrow, so
+that what it lets through is code: a bare word after `password =` in Java or TypeScript is a
+variable, never a secret, because a secret there would not compile. Kept as findings: any
+quoted value, anything in a configuration file (YAML, `.env`, properties, shell), the default
+in `${X:-...}`, and anything in a string or comment, such as a JDBC URL in a Java string.
+
+Not done: lowering the severity of these matches instead of skipping them. They would still
+be tasks, and a reviewer would still have to reject each one.

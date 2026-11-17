@@ -20,7 +20,12 @@ MAX_TITLE_CHARS = 300
 
 _PLACEHOLDER = re.compile(r"(?i)example|dummy|placeholder|changeme|xxx+|test|fake|sample")
 _VENDORED = re.compile(r"(^|/)(node_modules|vendor|third_party|\.venv|venv|dist|build)/")
-_TEST_PATH = re.compile(r"(^|/)(tests?|fixtures?|examples?|testdata|__tests__)/|_test\.|test_")
+_TEST_PATH = re.compile(
+    r"(^|/)(tests?|fixtures?|examples?|testdata|__tests__)/|_test\.|test_"
+    # Tests named by convention: Login.test.tsx, api.spec.ts, auth_spec.rb, AccountTest.java,
+    # AuthTests.kt, LoginIT.java.
+    r"|[._](test|spec)\.[A-Za-z]+$|[a-z0-9](Tests?|IT|Spec)\.(java|kt|kts|scala|groovy|cs)$"
+)
 _PERF_WORDS = re.compile(r"(?i)timeout|timed out|slow|latency|deadline|too long|pool exhausted")
 _PLACEHOLDER_TOKEN = re.compile(r"<(?:num|hex|uuid|ts|str|redacted|\*)>")
 

@@ -144,6 +144,13 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
 - **Redaction is pattern-based.** It catches common credential and PII formats and values of
   sensitive-looking keys. It cannot recognize a secret with no recognizable shape. Add
   `redaction_extra_patterns` for your own formats.
+- **The secrets audit skips values that only refer to a secret** (`${DB_PASSWORD}`, `$PASS`,
+  a template, or an unquoted variable or call in program code), so that a review queue is not
+  filled with them. A secret written as a bare word in program source, outside any string or
+  comment, is therefore not reported; it would not compile in most languages. Literals in
+  strings, comments, configuration files and defaults are reported
+  (`test_secrets_a_reference_or_an_expression_is_not_a_hardcoded_credential`). Redaction and
+  the credential gate on diffs are not changed by this: they still mask such values.
 - **Admin-supplied regular expressions are trusted** (`redaction_extra_patterns`,
   `policy_rules`, file-connector `pattern`). A pathological pattern can stall a worker.
 - **Per-finding suppressions in the audited repository are honoured.** A `.gitleaksignore`

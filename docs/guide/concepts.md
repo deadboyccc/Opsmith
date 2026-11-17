@@ -35,10 +35,10 @@ The task page in the UI and `GET /api/v1/tasks/{id}/provenance` show that chain.
 
 ### 1. Ingest
 
-A **connector** fetches signals for a time window (Loki, Prometheus, files) or receives them
-through the push API. Each record is normalized to a common schema, mapped to a service, and
-**redacted** before it is stored. Records that cannot be parsed are skipped and counted, not
-allowed to block the rest.
+A **connector** fetches signals for a time window (Loki, VictoriaLogs, Prometheus, files) or
+receives them through the push API. Each record is normalized to a common schema, mapped to a
+service, and **redacted** before it is stored. Records that cannot be parsed are skipped and
+counted, not allowed to block the rest.
 
 Bundles are then built per service:
 
@@ -75,7 +75,7 @@ only in between), analyzers examine a checkout:
 
 | Analyzer | Finds |
 |---|---|
-| `secrets` | Credentials and private keys in files (values are masked in the finding) |
+| `secrets` | Credentials and private keys in files (values are masked in the finding). A value that only refers to a secret is not one: `${DB_PASSWORD}`, `$PASS`, `$(cat ...)`, a `{{ template }}`, or a variable or call in program code (`password = form.password`). A literal still is, including the default in `${X:-...}` and a value inside a string or a comment |
 | `python-ast` | Bare `except` and swallowed exceptions, mutable default arguments, `eval`, `yaml.load`, `subprocess` with a shell, SQL built from strings, HTTP calls without a timeout, queries inside loops |
 | `dependencies` | Unpinned dependencies; known vulnerabilities through OSV when enabled |
 | `compliance` | A missing license or one outside your allowlist; your own policy rules |

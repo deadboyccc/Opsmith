@@ -213,6 +213,7 @@ Honest scope, so you can judge it:
 | Documentation | Every command in [Getting started](docs/guide/getting-started.md) was run as written. A check in CI compares the docs with the code: links, cited tests, environment variables, settings, API endpoints, events, connector types, states and commands |
 | Coverage | 94.5% of lines and branches. CI fails below 93%, and audits the locked dependencies for known vulnerabilities on every push |
 | Loki, Prometheus | Run **against real servers** in CI on every push: Loki 2.9 and 3.7, Prometheus 2.53, 3.5 and 3.16. See the [compatibility matrix](docs/guide/compatibility.md) |
+| VictoriaLogs | A scripted server in CI on every push; run by hand against a real VictoriaLogs 1.53 server. Not yet live in CI |
 | GitHub | Tested against **mocked HTTP** only. Not yet exercised against github.com in CI |
 | Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested with the **real Anthropic SDK over a mocked transport**, not against the Claude API |
 | Production use | None yet. No load tests, no long-running deployment |
@@ -241,7 +242,7 @@ in [docs/README.md](docs/README.md). The pages are split by reader.
 | [API](docs/guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](docs/guide/security.md) | Know what is guaranteed, which test proves it, and what is not protected |
 | [Security audit](docs/SECURITY-AUDIT.md) | See what the last audit found, what was fixed and what is open |
-| [Compatibility](docs/guide/compatibility.md) | See which versions of Loki, Prometheus and the rest are verified, and how |
+| [Compatibility](docs/guide/compatibility.md) | See which versions of Loki, VictoriaLogs, Prometheus and the rest are verified, and how |
 
 **Developing Opsmith**
 

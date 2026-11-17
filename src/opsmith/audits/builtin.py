@@ -32,8 +32,37 @@ from opsmith.redaction import SECRET_DETECTORS, Detector
 _SECRET_SKIP = (".lock", ".min.js", ".svg", ".map")
 # Judged on the raw value before masking, so triage never needs to see the secret itself.
 _PLACEHOLDER_VALUE = re.compile(
-    r"(?i)example|dummy|placeholder|changeme|xxxx|fake|sample|your[_-]|<[^>]+>|^\$\{"
+    r"(?i)example|dummy|placeholder|changeme|xxxx|fake|sample|your[_-]|<[^>]+>|^\$\{|^[*•]+$"
 )
+# A value that names where the secret comes from rather than holding it: an environment
+# variable, a command substitution, a template. With a default (`${X:-literal}`) it is not
+# one, because the default is committed.
+_REFERENCE = re.compile(r"\$[A-Za-z_]\w*|\$\{[A-Za-z_][\w.]*:?-?\}|\$\(.*|\{\{.*\}\}")
+# The key is itself a variable being expanded (`"$PWD:/workspace"`), not being assigned.
+_EXPANDED_KEY = re.compile(r"\$\{?[A-Za-z_]\w*\}?:$")
+# Program source, where an unquoted value after `password =` is an identifier or a call.
+# Configuration files (YAML, .env, properties, shell) are not here: unquoted is literal there.
+_CODE_SUFFIXES = (
+    ".java", ".kt", ".kts", ".scala", ".groovy", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".vue", ".svelte", ".py", ".go", ".rb", ".rs", ".cs", ".php", ".swift", ".c", ".cc",
+    ".cpp", ".h", ".hpp", ".m", ".dart", ".lua", ".ex", ".exs",
+)  # fmt: skip
+_COMMENT_MARK = re.compile(r"//|/\*|#|<!--|^\s*\*")
+
+
+def _names_no_literal(rel: str, line: str, start: int, value: str) -> bool:
+    """Whether a generic credential match is code that refers to a secret, not a secret.
+
+    Judged conservatively: a value inside a string literal or a comment is always a literal,
+    because that is where committed secrets are.
+    """
+    before = line[:start]
+    if _REFERENCE.fullmatch(value) or _EXPANDED_KEY.search(before):
+        return True
+    if not rel.endswith(_CODE_SUFFIXES) or not (value[0].isalpha() or value[0] == "_"):
+        return False
+    in_string = any(before.count(quote) % 2 for quote in "\"'`")
+    return not in_string and not _COMMENT_MARK.search(before)
 
 
 # A PEM key spans several lines, so the multi-line redaction pattern can never match within one
@@ -104,6 +133,10 @@ class SecretsAnalyzer(Analyzer):
                 hits, masked = scan_line(line[:MAX_LINE_CHARS])
                 for det, column, secret in hits:
                     generic = det.name == "credential_assignment"
+                    if generic and _names_no_literal(rel, line, column, secret):
+                        continue
+                    if det.name == "url_credentials" and _REFERENCE.fullmatch(secret):
+                        continue
                     out.append(
                         RawFinding(
                             analyzer=self.name,

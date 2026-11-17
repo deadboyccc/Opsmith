@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from opsmith.llm import (
     AnthropicProvider,
     BudgetExceeded,
+    HeuristicProvider,
     LLMError,
     LLMGateway,
     LLMOutputError,
@@ -530,3 +531,39 @@ def test_anthropic_cached_input_is_counted_and_costed() -> None:
     assert (response.input_tokens, response.cache_read_tokens) == (8_000, 5_000)
     cost = cost_usd("claude-opus-5-5", response.input_tokens, 20, response.cache_read_tokens)
     assert cost == pytest.approx((3_000 * 4.00 + 5_000 * 0.20 + 20 * 20.00) / 1_000_000)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "frontend/src/pages/Login.test.tsx",
+        "web/src/api/endpoints.spec.ts",
+        "backend/src/main/java/app/AccountTest.java",
+        "app/src/main/kotlin/app/AuthTests.kt",
+        "backend/src/main/java/app/LoginIT.java",
+        "lib/auth_spec.rb",
+        "tests/test_auth.py",
+    ],
+)
+def test_offline_triage_knows_test_files_by_name(path: str) -> None:
+    """A credential in a test file counts for less, and a placeholder one is dropped, also
+    where tests are named by convention rather than kept in a tests/ directory."""
+    item = {"index": 0, "rule_id": "secret.credential_assignment", "path": path,
+            "snippet": "password = ***", "confidence": 0.55}  # fmt: skip
+    triage = HeuristicProvider()._triage
+    (lowered,) = triage({"findings": [{**item, "placeholder_value": False}]})["decisions"]
+    assert lowered["keep"] is True
+    assert lowered["confidence"] < 0.55
+    (dropped,) = triage({"findings": [{**item, "placeholder_value": True}]})["decisions"]
+    assert dropped["keep"] is False
+
+
+@pytest.mark.parametrize(
+    "path", ["src/contest/Prize.java", "src/attestation.ts", "backend/src/Testimonial.java"]
+)
+def test_offline_triage_does_not_take_test_like_words_for_tests(path: str) -> None:
+    item = {"index": 0, "rule_id": "secret.credential_assignment", "path": path,
+            "snippet": "password = ***", "confidence": 0.55, "placeholder_value": True}  # fmt: skip
+    (decision,) = HeuristicProvider()._triage({"findings": [item]})["decisions"]
+    assert decision["keep"] is True
+    assert decision["confidence"] > 0.55

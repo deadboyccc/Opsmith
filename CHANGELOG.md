@@ -6,6 +6,21 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Fixed
+
+- **The secrets audit reported references as hardcoded credentials.** `${DB_PASSWORD}`,
+  `$PASS`, `$(cat /run/secrets/x)`, a `{{ template }}`, `"$PWD:/src"` in a shell command,
+  and a variable or call in program code (`this.password = password`) each became a
+  medium-severity finding and a task. On a real Java and TypeScript code base, every one of
+  the 50 tasks the first audit drafted was of this kind or in a test. A literal is still
+  reported: inside a string or a comment, unquoted in a configuration file, and as the
+  default of `${X:-...}`. Redaction and the diff gate are unchanged.
+- **The offline triage did not recognize tests named by convention**: `Login.test.tsx`,
+  `api.spec.ts`, `auth_spec.rb`, `AccountTest.java`, `AuthTests.kt`, `LoginIT.java`. A
+  credential in them now counts for less, and a placeholder one is dropped, as in a `tests/`
+  directory.
+- A value made only of mask characters (`"******"`) is marked as a placeholder.
+
 ## 1.4.1 - 2026-11-17
 
 ### Fixed
