@@ -313,7 +313,31 @@ offline demo, whose data is all synthetic.
 - **Rendered frame by frame from HTML,** not screen-recorded: the storyboard is a page with a
   timeline function, and each of the 930 frames is a screenshot at an exact time. The video
   is the same on every run and every machine, and a change is an edit to the page.
-- **Silent.** A background track would need a licence, and phones play social video muted by
-  default; the captions carry the message.
+- **Music, no voice.** The captions carry the message, so the video works muted, which is
+  how phones start social video. The music is the subject of the next entry.
 - **Size:** 2.2 MB at 1080 x 1920, H.264 with `faststart` so it streams. The site loads it
   only when someone presses play (`preload="none"`), showing an 87 KB poster until then.
+
+### Original music, synthesized, on both videos
+
+Both videos have an instrumental track and no voice-over (a narrated version was tried and
+dropped). The music is composed and synthesized by `scripts/soundtrack.py`, not taken from a
+library.
+
+- **Why synthesize it:** a library track needs a licence that allows redistribution in a
+  public repository and on a website, and the terms have to be kept with it. Music generated
+  here from oscillators and noise has no such terms, and the same command always produces
+  the same audio, so a re-recorded video gets its music back with one command.
+- **What it is:** Am, F, C, G (a common, warm, slightly hopeful progression), with a chord
+  pad, a plucked arpeggio with a bouncing echo, a bassline, soft kick, hi-hat and, in the
+  reel, claps, plus reverb. Each piece is fitted to its video, and the last chord is always
+  A minor, the home key, held while it fades, so it ends instead of stopping.
+- **Two moods:** the reel is upbeat (112 BPM), with drums from the second bar, because it
+  has to hold attention on its own. The demo video is calmer (92 BPM), sparser and 3 LU
+  quieter, because it plays under captions someone is reading.
+- **Loudness:** -16 LUFS for the reel, the usual target for social video, and -19 LUFS for
+  the demo video. Both are measured to that target with headroom below the peak limit.
+- **Checked without listening:** the mix was judged from its spectrum, per bar and per
+  band. The first version put half its energy below 80 Hz, which phone speakers barely
+  reproduce, so it would have sounded thin on a phone. The bass was moved up an octave and
+  the kick given an overtone, putting the weight between 80 and 250 Hz.

@@ -107,3 +107,11 @@ mascot. Every run gives the same video:
 ```bash
 uv run --no-project --with playwright --with imageio-ffmpeg python scripts/reel_video.py
 ```
+
+Both scripts record silent video. Both videos have an original instrumental track, composed
+and synthesized by [`scripts/soundtrack.py`](../../scripts/soundtrack.py) (no voice, nothing
+licensed), so run it after recording either one:
+
+```bash
+uv run --no-project --with numpy --with imageio-ffmpeg python scripts/soundtrack.py
+```

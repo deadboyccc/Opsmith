@@ -54,7 +54,7 @@ human would, and confirms the problem is gone. The [overview](overview.md) shows
 one-minute video; here it is in thirty seconds:
 
 <div class="os-reel">
-  <video controls muted playsinline preload="none" width="1080" height="1920" poster="docs/images/reel-poster.jpg" aria-label="Opsmith in 30 seconds: it reads your logs, metrics and code, a human approves every change, a sandboxed agent writes the fix and opens a pull request, it never merges, and after the merge it checks the bug is really gone.">
+  <video controls playsinline preload="none" width="1080" height="1920" poster="docs/images/reel-poster.jpg" aria-label="Opsmith in 30 seconds: it reads your logs, metrics and code, a human approves every change, a sandboxed agent writes the fix and opens a pull request, it never merges, and after the merge it checks the bug is really gone.">
     <source src="docs/images/reel.mp4" type="video/mp4">
     <a href="docs/images/reel.mp4">Watch the 30-second video</a>
   </video>

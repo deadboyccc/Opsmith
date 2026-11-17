@@ -13,6 +13,8 @@ run and on every machine, whatever its speed. The frames are piped straight into
 
 Writes ``docs/images/reel.mp4`` (H.264, ``faststart`` for streaming) and
 ``docs/images/reel-poster.jpg`` (its first beat, shown before the video plays).
+
+The video is silent; ``scripts/soundtrack.py`` adds its music. Run it afterwards.
 """
 
 # ruff: noqa: E501 - the storyboard below is an HTML template; its lines read best unwrapped.

@@ -6,6 +6,21 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.3.3 - 2026-11-17
+
+### Added
+
+- **Music on both videos**: an original instrumental track, no voice, composed for each and
+  ending on a resolved chord as the video fades out. The reel's is upbeat (112 BPM), the
+  demo video's calmer and quieter (92 BPM), under the captions. `scripts/soundtrack.py`
+  synthesizes it from scratch, so there is nothing to license, and every run writes the same
+  audio. The site's player now starts with the sound on when pressed.
+
+### Removed
+
+- The narration support added to `scripts/demo_video.py` in 1.3.2. The videos have music and
+  captions, and no voice-over, so the code had no use.
+
 ## 1.3.2 - 2026-11-17
 
 ### Added
