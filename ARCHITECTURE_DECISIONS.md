@@ -34,9 +34,11 @@ calls) are preserved by every decision below.
   created with `metadata.create_all`; that was replaced after 1.0.0, before the first schema
   change.
   - *Applied at start.* Every process brings the database to the newest revision when it
-    starts (`Database.migrate`), as `create_all` did, so an upgrade needs no extra step. On
-    PostgreSQL the upgrade runs in one transaction under an advisory lock, so the API, worker
-    and scheduler can start together: one migrates and the others find nothing to do.
+    starts (`Database.migrate`), as `create_all` did, so an upgrade needs no extra step. The
+    upgrade runs in one transaction under a lock (an advisory lock on PostgreSQL, the write
+    lock on SQLite, taken only when there is something to migrate), so the API, worker and
+    scheduler can start together, as processes or as the threads of `opsmith run`: one
+    migrates and the others find nothing to do.
   - *Existing databases.* A database without a version table that has the 1.0.0 tables and
     columns is adopted by stamping it `0001`. One from before 1.0.0 is refused with a message:
     there is nothing to migrate it from. A database at a revision the code does not know (a
@@ -339,7 +341,7 @@ calls) are preserved by every decision below.
 ## Known limitations (MVP)
 
 - Upgrades are stop-and-start, not rolling: an older process must not run against a newer
-  schema. Concurrent first starts are serialized on PostgreSQL only (ADR-002).
+  schema.
 - With SQLite, a long LLM call or audit holds the writer lock; use PostgreSQL for concurrent
   workers.
 - The Docker sandbox is a container, not a VM, and one sandbox image serves every repository a

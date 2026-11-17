@@ -7,6 +7,8 @@ SQL so both work.
 
 from __future__ import annotations
 
+import sqlite3
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -63,21 +65,46 @@ class Base(DeclarativeBase):
     }
 
 
+SQLITE_BUSY_SECONDS = 30  # how long a SQLite connection waits for another one's write lock
+
+
+def _use_wal(cur: sqlite3.Cursor) -> None:
+    """Put the database file in WAL mode, once.
+
+    SQLite does not apply the busy timeout to this switch: while another connection holds the
+    write lock it fails at once with "database is locked". Two processes starting on a new
+    file do exactly that, so the switch waits here for up to the same timeout, then fails.
+    """
+    if cur.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
+        return
+    deadline = time.monotonic() + SQLITE_BUSY_SECONDS
+    while True:
+        try:
+            cur.execute("PRAGMA journal_mode=WAL").fetchone()
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
 def make_engine(url: str) -> Engine:
     kwargs: dict[str, Any] = {"future": True}
     if url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": SQLITE_BUSY_SECONDS}
     engine = create_engine(url, **kwargs)
     if url.startswith("sqlite"):
 
         @event.listens_for(engine, "connect")
         def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
             cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            if ":memory:" not in url:
-                cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=30000")
-            cur.close()
+            try:
+                cur.execute("PRAGMA foreign_keys=ON")
+                cur.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_SECONDS * 1000}")
+                if ":memory:" not in url:
+                    _use_wal(cur)
+            finally:
+                cur.close()
 
     return engine
 

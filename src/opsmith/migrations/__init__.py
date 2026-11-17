@@ -109,8 +109,16 @@ def _adopt_unversioned(connection: Connection, tables: set[str]) -> None:
 def upgrade(engine: Engine) -> None:
     """Bring the database to the newest schema revision. Safe to call from every process."""
     with engine.begin() as conn:
+        # Processes (and the threads of ``opsmith run``) that start together migrate one at
+        # a time: the first holds the lock, the others wait for it and then find the schema
+        # current. Everything below runs again under the lock.
         if conn.dialect.name == "postgresql":
             conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _LOCK_KEY})
+        elif conn.dialect.name == "sqlite" and current_revision(conn) != head_revision():
+            # The sqlite3 driver begins no transaction before DDL, so ``engine.begin()`` alone
+            # locks nothing. Take the write lock (waiting up to the busy timeout), and only
+            # when there is work: a start at the newest revision never waits for a writer.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
         tables = set(inspect(conn).get_table_names())
         if VERSION_TABLE not in tables and tables & _MARKER_TABLES:
             _adopt_unversioned(conn, tables)

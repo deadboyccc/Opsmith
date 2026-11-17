@@ -359,3 +359,23 @@ query API. A read-only connector reads it directly; the alternative, shipping a
 second copy of every log line to Opsmith's push endpoint, would duplicate storage and add a
 moving part. The connector takes the level a message states over the syslog severity,
 because Docker's syslog driver records everything written to stderr as an error.
+
+## Concurrent starts on SQLite (1.4.1)
+
+### The write lock, taken only when there is work
+
+`opsmith run` starts three threads that each migrate the schema, so on a new SQLite file they
+created the same tables at once. SQLite has no advisory lock, and the `sqlite3` driver begins
+no transaction before DDL, so `engine.begin()` alone locked nothing. The upgrade now issues
+`BEGIN IMMEDIATE`, the write lock, but only when the database is not at the newest revision.
+Taking it on every start would make a process that restarts during a long write (an audit
+holding the lock) wait, and fail after the busy timeout, for nothing. Not taken: a lock file
+next to the database, which would not cover a database on another path or a second host.
+
+### Waiting for the WAL switch is a retry, on purpose
+
+Switching a file to WAL is the one SQLite operation that fails at once with "database is
+locked" instead of waiting for the busy timeout, because waiting there could deadlock. The
+connection hook therefore retries the switch every 50 ms, for the same 30 seconds as the busy
+timeout, and only for that error; any other error, or the timeout, still fails the start. A
+file already in WAL mode is left alone, so this happens at most once per database.

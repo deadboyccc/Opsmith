@@ -5,8 +5,10 @@ Run on SQLite by default and on PostgreSQL when ``OPSMITH_TEST_DATABASE_URL`` is
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -122,10 +124,11 @@ def test_a_database_written_by_a_newer_release_is_refused(engine: Engine) -> Non
         upgrade(engine)
 
 
-def test_processes_starting_together_migrate_once(database_url: str) -> None:
-    """The API, worker and scheduler are separate processes that Compose starts together."""
-    if not database_url.startswith("postgresql"):
-        pytest.skip("concurrent starts are only supported on PostgreSQL")
+def test_processes_starting_together_migrate_once(database_url: str, tmp_path: Path) -> None:
+    """The API, worker and scheduler start together, as processes (Compose) or as threads
+    of one process (``opsmith run``). On a fresh SQLite database they all created the schema
+    at once: "table alembic_version already exists", and a half-made schema after that."""
+    database_url = database_url or f"sqlite:///{tmp_path / 'fresh.db'}"
     go = time.time() + 5  # every process starts its upgrade at the same moment
     script = (
         "import sys, time\n"
@@ -158,6 +161,45 @@ def test_processes_starting_together_migrate_once(database_url: str) -> None:
     try:
         assert _revision(engine) == head_revision()
         assert _drift(engine) == []
+    finally:
+        engine.dispose()
+
+
+def test_the_first_connection_to_a_new_sqlite_file_waits_for_a_writer(tmp_path: Path) -> None:
+    """Switching a file to WAL ignores the busy timeout: while another connection writes,
+    SQLite says "database is locked" at once. Two processes starting on a new file did that."""
+    path = tmp_path / "new.db"
+    writer = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    writer.execute("CREATE TABLE early (id INTEGER)")
+    writer.execute("BEGIN IMMEDIATE")  # another process is writing (rollback-journal mode)
+    done = threading.Timer(0.5, writer.execute, args=("COMMIT",))
+    done.start()
+    engine = make_engine(f"sqlite:///{path}")
+    try:
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
+    finally:
+        done.join()
+        writer.close()
+        engine.dispose()
+
+
+def test_a_start_at_the_newest_revision_does_not_wait_for_a_writer(tmp_path: Path) -> None:
+    """On SQLite the upgrade takes the write lock only when there is something to do, so a
+    process that restarts while another holds the lock (a long job) starts at once."""
+    path = tmp_path / "busy.db"
+    engine = make_engine(f"sqlite:///{path}")
+    try:
+        upgrade(engine)
+        writer = sqlite3.connect(path, timeout=1)
+        try:
+            writer.execute("BEGIN IMMEDIATE")  # another process is writing
+            started = time.monotonic()
+            upgrade(engine)
+            assert time.monotonic() - started < 5
+        finally:
+            writer.rollback()
+            writer.close()
     finally:
         engine.dispose()
 

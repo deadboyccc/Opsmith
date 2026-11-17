@@ -6,6 +6,17 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Fixed
+
+- **`opsmith run` could not start on a new SQLite database.** Its API, worker and scheduler
+  each created the schema at the same moment ("table alembic_version already exists"), and
+  the database was left half made. Schema upgrades on SQLite now take the database's write
+  lock, as they take an advisory lock on PostgreSQL, so one start migrates and the others
+  wait. Starting with `opsmith init` first, as the guides do, was not affected.
+- **Two processes opening a new SQLite file at once could fail** with "database is locked":
+  SQLite does not apply the busy timeout when a file is switched to WAL. The switch now waits
+  for the other writer, for up to the same 30 seconds.
+
 ## 1.4.0 - 2026-11-17
 
 ### Added
