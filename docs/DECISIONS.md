@@ -276,3 +276,12 @@ sideways scrolling, every image loaded (lazy ones after scrolling to them), and 
 logo and favicon present. Two defects were found and fixed this way: the README's raw-HTML
 images were broken under directory URLs, and both landing-page buttons were navy on navy in
 dark mode.
+
+### Pages is enabled by a person, once
+
+Turning GitHub Pages on for a repository needs the `pages: write` or `administration: write`
+permission, which the token used for this work did not have; the workflow's own token cannot
+do it either. The deploy job therefore checks first: while Pages is off it builds and checks
+the site, skips the deployment and leaves a warning on the run, instead of turning `main`
+red. Once a repository admin selects *Settings, Pages, Source: GitHub Actions*, the next push
+to `main` (or running the *Docs* workflow by hand) publishes the site.
