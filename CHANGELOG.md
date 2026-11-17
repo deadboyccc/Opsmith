@@ -6,6 +6,21 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.3.2 - 2026-11-17
+
+### Added
+
+- **A 30-second vertical video** for phones and social media
+  ([`docs/images/reel.mp4`](docs/images/reel.mp4), 1080 x 1920, 2.2 MB, no sound): the
+  Opsmith loop in seven beats, from "your logs already know what's broken" to "it never
+  merges" and "verified", with real screens from the offline demo. It plays on the landing
+  page of the documentation site and is linked from the README and the
+  [UI tour](docs/guide/ui-tour.md#how-the-pictures-and-videos-are-made).
+  `scripts/reel_video.py` renders it; every run gives the same video.
+- `scripts/demo_video.py` can narrate the demo video: each caption has a spoken line, the
+  recording waits for each line to finish, and the lines are mixed in where their beats
+  start. Without the recordings it records silently, as before.
+
 ## 1.3.1 - 2026-11-17
 
 ### Changed

@@ -73,6 +73,11 @@ Here is the demo in one minute, with a reviewer approving in the UI
 
 <a href="docs/images/demo.mp4"><img src="docs/images/demo.gif" alt="A reviewer signs in, reads the top-ranked task and its evidence, and approves it. Opsmith implements the fix in the sandbox, opens a pull request, a human merges it, and the task ends verified." width="720"></a>
 
+Or the 30-second version, vertical, for sharing on phones
+([reel.mp4](docs/images/reel.mp4), 1080 x 1920):
+
+<a href="docs/images/reel.mp4"><img src="docs/images/reel-poster.jpg" alt="Opsmith in 30 seconds: it reads your logs, metrics and code, a human approves every change, a sandboxed agent writes the fix and opens a pull request, it never merges, and after the merge it checks the bug is really gone." width="220"></a>
+
 ## How it works
 
 One loop: **observe → analyze → propose → human approves → execute → pull request → verify.**

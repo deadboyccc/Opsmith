@@ -8,7 +8,7 @@ come with.
 - [Writing a test](#writing-a-test)
 - [Continuous integration](#continuous-integration)
 - [Keeping the docs true](#keeping-the-docs-true)
-- [Regenerating the UI screenshots](#regenerating-the-ui-screenshots)
+- [Regenerating the UI screenshots and videos](#regenerating-the-ui-screenshots-and-videos)
 
 ## Running the tests
 
@@ -137,9 +137,11 @@ adjusts the copies for the web (see its docstring), adds the landing page and st
 `site/`, and runs MkDocs. A new page appears on the site once it is added to `nav` in
 `mkdocs.yml`; MkDocs reports a page that is missing from `nav`.
 
-## Regenerating the UI screenshots
+## Regenerating the UI screenshots and videos
 
-The pictures in the [UI tour](../guide/ui-tour.md) come from the offline demo:
+The pictures in the [UI tour](../guide/ui-tour.md) come from the offline demo. The demo video
+and the vertical reel are made from it too; the [UI tour](../guide/ui-tour.md#how-the-pictures-and-videos-are-made)
+has the commands for both.
 
 ```bash
 uvx --from playwright playwright install chromium     # once

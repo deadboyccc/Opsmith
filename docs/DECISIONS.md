@@ -300,3 +300,20 @@ not followed) and adds what is specific to Claude Code and the Claude API.
 The work that produced these rules pushed each release straight to `main`, which the
 repository owner allowed for that work only. The rules say the opposite (branch, pull
 request, green CI), because that is the standing practice.
+
+## Videos
+
+### A vertical reel, made from the product itself
+
+The reel asked for was modelled on short social videos promoting open-source tools: vertical,
+about thirty seconds, big captions, a call to action at the end. It is original, in that
+genre, and uses only Opsmith's own material: the mascot as it is, and screenshots of the
+offline demo, whose data is all synthetic.
+
+- **Rendered frame by frame from HTML,** not screen-recorded: the storyboard is a page with a
+  timeline function, and each of the 930 frames is a screenshot at an exact time. The video
+  is the same on every run and every machine, and a change is an edit to the page.
+- **Silent.** A background track would need a licence, and phones play social video muted by
+  default; the captions carry the message.
+- **Size:** 2.2 MB at 1080 x 1920, H.264 with `faststart` so it streams. The site loads it
+  only when someone presses play (`preload="none"`), showing an 87 KB poster until then.

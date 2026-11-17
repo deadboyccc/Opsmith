@@ -170,3 +170,22 @@
 .md-typeset .os-hero h1 {
   color: var(--os-heading);
 }
+
+/* ------------------------------------------------------------------ the vertical reel */
+/* A phone-shaped player: never wider than a phone, never taller than the window. */
+
+.md-typeset .os-reel {
+  display: flex;
+  justify-content: center;
+  margin: 1.2rem 0 1.6rem;
+}
+
+.md-typeset .os-reel video {
+  width: min(100%, 22rem, calc((100vh - 8rem) * 9 / 16));
+  height: auto;
+  aspect-ratio: 9 / 16;
+  border-radius: 1rem;
+  border: 1px solid var(--os-panel-border);
+  background: #0b1120;
+  box-shadow: 0 0.6rem 1.6rem #0b112033;
+}
