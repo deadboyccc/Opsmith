@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest something essential that Opsmith is missing.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opsmith deliberately keeps a small set of features. The most helpful requests describe a problem you have, rather than a solution.
+
+        New log sources, analyzers and model providers can often be plugins instead (see [Extending Opsmith](https://deadboyccc.github.io/Opsmith/docs/development/architecture/#extending-opsmith)).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it
+  - type: textarea
+    id: why-core
+    attributes:
+      label: Why it belongs in Opsmith
+      description: Why this should be part of Opsmith itself, rather than a plugin, a setting or a separate tool.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead

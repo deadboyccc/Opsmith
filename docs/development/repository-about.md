@@ -22,7 +22,7 @@ https://deadboyccc.github.io/Opsmith/
 Paste the whole line; GitHub splits it on spaces.
 
 ```
-devops sre observability code-review ai-agents llm self-hosted python fastapi human-in-the-loop pull-requests ollama
+devops sre observability aiops llm ai-agents code-review human-in-the-loop self-hosted pull-requests log-analysis prometheus loki victorialogs security-audit static-analysis ollama python fastapi
 ```
 
 ## Social preview

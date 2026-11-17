@@ -19,6 +19,11 @@ the database schema says so under *Upgrade notes*.
   `[[projects.service]]`), so what they held silently did not exist. Unknown keys are now
   errors at every level, as the docs said.
 
+### Added
+
+- `SECURITY.md`, issue forms for bug reports and feature requests, and a pull request template
+  with the checklist from `AGENTS.md`.
+
 ### Upgrade notes
 
 - `opsmith apply` now refuses a file with an unknown top-level or project key. If an apply
