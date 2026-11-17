@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.5.1 - 2026-11-17
+
 ### Changed
 
 - The landing page, the README, the concepts, getting started, UI tour and operations guides,
