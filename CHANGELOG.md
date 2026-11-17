@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.5.0 - 2026-11-17
+
 ### Added
 
 - **Checks: your own reviews, on a schedule.** A check is an instruction in plain words

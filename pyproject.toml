@@ -1,6 +1,6 @@
 [project]
 name = "opsmith"
-version = "1.4.3"
+version = "1.5.0"
 description = "Autonomous engineering ops platform: observe -> analyze -> propose -> human approve -> execute -> PR."
 readme = "README.md"
 license = "MIT"
