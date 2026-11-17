@@ -7,6 +7,7 @@ backend is a drop-in (see ARCHITECTURE_DECISIONS.md, ADR-005).
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any, Protocol
@@ -37,11 +38,19 @@ class LocalObjectStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         count = 0
         tmp = path.with_suffix(path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            for rec in records:
-                fh.write(json.dumps(rec, default=str, separators=(",", ":")) + "\n")
-                count += 1
-        tmp.replace(path)  # atomic publish
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                for rec in records:
+                    fh.write(json.dumps(rec, default=str, separators=(",", ":")) + "\n")
+                    count += 1
+                fh.flush()
+                os.fsync(fh.fileno())  # on disk before it is published under its name
+            tmp.replace(path)  # atomic publish
+        except BaseException:
+            # A write that failed half-way must not leave its partial file in the store:
+            # nothing would ever clean it up.
+            tmp.unlink(missing_ok=True)
+            raise
         return count
 
     def iter_jsonl(self, key: str) -> Iterator[dict[str, Any]]:

@@ -56,7 +56,7 @@ markers = [
 filterwarnings = ["error::DeprecationWarning:opsmith.*"]
 
 [tool.coverage.run]
-source = ["opsmith"]
+source = ["src/opsmith"]
 branch = true
 
 [tool.coverage.report]
