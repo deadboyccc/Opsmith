@@ -17,8 +17,8 @@ jobs:
     name: lint, types, tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.9.5"
           python-version: "3.12"
@@ -33,7 +33,21 @@ jobs:
       - run: uv run ruff format --check src tests scripts
       - run: uv run mypy
       - run: uv run python scripts/check_docs.py
+      # Fails below the floor in pyproject.toml ([tool.coverage.report] fail_under).
       - run: uv run pytest -q --cov --cov-report=term
+
+  audit:
+    # Known vulnerabilities in any locked dependency, extras included. Runs on every push,
+    # so a newly published advisory turns the next build red.
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.5"
+          python-version: "3.12"
+      - run: make audit
 
   postgres:
     name: full suite on PostgreSQL
@@ -53,8 +67,8 @@ jobs:
       # Every test gets its own freshly created database (see tests/conftest.py).
       OPSMITH_TEST_DATABASE_URL: postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.9.5"
           python-version: "3.12"
@@ -81,8 +95,8 @@ jobs:
           - { server: prometheus, version: "v3.5.5", image: "prom/prometheus", port: 9090, ready: "/-/ready" }
           - { server: prometheus, version: "v3.16.0", image: "prom/prometheus", port: 9090, ready: "/-/ready" }
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.9.5"
           python-version: "3.12"
@@ -111,7 +125,7 @@ jobs:
     name: container image and compose files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: docker build --target runtime -t opsmith:ci .
       - run: docker build --target dev -t opsmith-dev:ci .
       - run: docker run --rm opsmith-dev:ci pytest -q -x

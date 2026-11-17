@@ -2,7 +2,7 @@
 UV ?= uv
 DEV_IMAGE ?= opsmith-dev
 
-.PHONY: help setup lint fmt type test cov docs check demo run docker-dev docker-test clean
+.PHONY: help setup lint fmt type test cov docs audit check demo run docker-dev docker-test clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -30,7 +30,12 @@ cov: ## Tests with coverage report
 docs: ## Check documentation links, anchors and cited tests
 	$(UV) run python scripts/check_docs.py
 
-check: lint type cov docs ## Everything CI runs
+audit: ## Known vulnerabilities in the locked dependencies (needs network)
+	$(UV) export --frozen --all-extras --no-emit-project --format requirements-txt -o .audit-requirements.txt
+	$(UV) tool run pip-audit==2.10.1 -r .audit-requirements.txt --require-hashes --disable-pip --progress-spinner off; \
+	  status=$$?; rm -f .audit-requirements.txt; exit $$status
+
+check: lint type cov docs ## Everything CI runs offline (CI also runs `make audit`)
 
 demo: ## Offline end-to-end demo
 	$(UV) run opsmith demo --dir ./opsmith-demo

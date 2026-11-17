@@ -550,11 +550,13 @@ def test_slow_job_keeps_its_lease_through_the_heartbeat(platform, seed) -> None:
     seen: dict[str, Any] = {}
 
     def slow(_s, _job):
-        time.sleep(2.5)  # longer than the lease below
+        time.sleep(4.0)  # longer than the lease below
         seen["recovered_by_other_worker"] = other.recover_expired_leases()
         return {"ok": True}
 
-    worker = Worker(platform.db, {"t": slow}, lease_seconds=1, heartbeat_seconds=0.2)
+    # The lease is several heartbeats long, so a busy test machine that delays the heartbeat
+    # thread by up to 2.8 seconds does not fail the test.
+    worker = Worker(platform.db, {"t": slow}, lease_seconds=3, heartbeat_seconds=0.2)
     assert worker.run_once().status == "succeeded"
     assert seen["recovered_by_other_worker"] == 0
     with platform.db.session() as s:

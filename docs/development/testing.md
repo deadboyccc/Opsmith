@@ -14,8 +14,9 @@ come with.
 
 ```bash
 uv sync --all-extras
-make check                          # everything CI runs: ruff, format check, mypy, tests with coverage
-uv run pytest -q                    # tests only, two to three minutes
+make check                          # ruff, format check, mypy, tests with coverage, docs check
+make audit                          # known vulnerabilities in the locked dependencies (needs network)
+uv run pytest -q                    # tests only, four to six minutes
 uv run pytest tests/test_llm.py -q  # one area while you iterate
 uv run pytest -k "budget" -q        # by name
 ```
@@ -59,6 +60,7 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 | `test_llm.py`, `test_openai_provider.py` | The gateway and the two remote providers, against fake clients and a scripted endpoint |
 | `test_queue_scheduler.py`, `test_notifications.py`, `test_scm_tracking.py` | Infrastructure |
 | `test_api.py`, `test_cli.py` | The REST API, the UI routes and the command line |
+| `test_runtime.py` | What only a deployed process runs: the worker and scheduler loops (recovery after an error, stop signals), logging, the object store, the Docker sandbox's failure paths, provider plugins, the `alembic` command |
 | `test_migrations.py` | The schema migrations match the models; adopting 1.0.0 databases; refusing older and newer ones; concurrent starts on PostgreSQL |
 | `test_connectors_live.py` | The Loki and Prometheus connectors against real servers (skipped without them) |
 
@@ -80,6 +82,8 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
   it to the table in [Security](../guide/security.md).
 - **Prove the test can fail.** Check that it fails without your change. A timing-dependent test
   is a bug: control the clock or the order instead of hoping.
+- **A bug fix starts with its test.** Write the test that reproduces the bug, see it fail for
+  the reason you expect, then fix the code. The test stays, as the regression test.
 - **Use the fixtures** rather than building rows by hand, and `add_finding` / `aggregate`
   (`test_aggregation.py`) or `make_task` / `approve` (`test_executor.py`) to reach the state you
   need.
@@ -90,10 +94,14 @@ skipped. `uv run pytest -q -rs` lists what was skipped and why.
 
 | Job | Does |
 |---|---|
-| `lint, types, tests` | ruff, format check, mypy, the suite with coverage. Docker is available, so the container tests run |
+| `lint, types, tests` | ruff, format check, mypy, the documentation check, the suite with coverage. Docker is available, so the container tests run. Fails if coverage falls below the floor (`fail_under` in `pyproject.toml`) |
+| `dependency audit` | `make audit`: every locked dependency, extras included, checked against the advisory databases with `pip-audit`. A new advisory turns the next build red |
 | `full suite on PostgreSQL` | The whole suite with `OPSMITH_TEST_DATABASE_URL` set |
 | `loki …`, `prometheus …` | One job per server version in the [compatibility matrix](../guide/compatibility.md): starts that server and runs `tests/test_connectors_live.py` against it |
 | `container image and compose files` | Builds both images, runs the suite inside the dev image, and checks that Compose refuses an empty database password |
+
+Actions are pinned to a commit (the tag is in a comment next to it), so a moved tag cannot
+change what CI runs. To update one, look up the commit of the new tag and replace both.
 
 `.github/workflows/live-models.yml` is separate, because it is slow: it starts Ollama with a
 small open model and runs the live tests against it (structured output, a pipeline stage

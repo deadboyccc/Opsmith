@@ -4,6 +4,36 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.2.3 - 2026-11-17
+
+Tests and continuous integration. No change to what Opsmith does, apart from the one fix below.
+
+### Changed
+
+- **CI fails when test coverage drops below 93%** (`fail_under` in `pyproject.toml`). Coverage
+  is 94.5% (it was 92% at 1.2.0 and 93% at 1.2.2, measured the same way).
+- **CI audits the locked dependencies on every push** with `pip-audit` (new `make audit`), so a
+  newly published advisory turns the next build red.
+- **Workflow actions are pinned to a commit**, and the live-model workflow to an Ollama
+  release instead of `latest`, so a moved tag cannot change what CI runs.
+- Coverage is measured by path, so `src/opsmith/migrations/env.py` (which alembic loads as a
+  file) is counted; it was reported as never run.
+
+### Added
+
+- `tests/test_runtime.py`: the worker and scheduler loops, including their recovery after an
+  error and their stop signal; JSON logging; the object store; the Docker sandbox's failure
+  paths; provider plugins; notifications without a project; the `alembic` command.
+- Tests for the GitHub provider's git commands, token handling, API failures and the
+  commit-status fallback for CI.
+
+### Fixed
+
+- **A write to the object store that failed half-way left its `.tmp` file behind** for good.
+  It is now removed, and a complete file is synced to disk before it is published.
+- A test of the lease heartbeat tolerated less than a second of scheduling delay; it now
+  tolerates nearly three, and still fails when the heartbeat stops.
+
 ## 1.2.2 - 2026-11-17
 
 A security release: the result of an audit of the whole code base

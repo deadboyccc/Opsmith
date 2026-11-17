@@ -174,4 +174,41 @@ check was changed to compile in memory, and the behaviour is called out in the u
 
 Listed with reasons in [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md#open-findings): the model's
 own `signal` being trusted, no rate limiting in the application, shared tenancy, private
-hosts as addresses, the CPU cost of template mining, and actions pinned by tag.
+hosts as addresses, and the CPU cost of template mining. (Actions pinned by tag was fixed in
+1.2.3.)
+
+## Tests and CI (1.2.3)
+
+### A coverage floor of 93%, not a target
+
+CI fails when coverage falls below 93%; it is 94.5%. The floor is set a little under the
+current figure so that an honest refactor that removes tested code does not break the build,
+while a change that adds untested code does. Raise it as coverage rises. A target such as
+100% would push tests toward lines rather than behaviour; the code that is still not covered
+is mostly defensive branches (a plugin that fails to load, a kernel refusing to kill a
+process group).
+
+### Coverage measured by path
+
+`source = ["src/opsmith"]` instead of the package name. Alembic loads `migrations/env.py` as
+a file, not as a module of the package, so measuring by package reported it as never run
+although the migration tests run it on every start.
+
+### The dependency audit is its own CI job and needs the network
+
+`make check` stays runnable offline (it is what a contributor runs before every push);
+`make audit` is separate because it queries advisory databases. `pip-audit` is pinned to a
+version and reads the lock file with hashes, so it checks exactly what is installed.
+
+### Actions pinned by commit
+
+A tag in another repository can be moved to different code; a commit cannot. The tag stays
+in a comment so the pin can be read and updated. This was open item O6 of the
+[security audit](SECURITY-AUDIT.md).
+
+### No test was removed as flaky
+
+Every full run in this work (eight on SQLite, three on PostgreSQL) passed. Two tests depend
+on real time. The heartbeat test's margin was widened (it allowed less than a second of
+delay before the lease lapsed); the process-group test can only err toward passing, so it was
+left as it is. Neither the suite nor CI retries failing tests.

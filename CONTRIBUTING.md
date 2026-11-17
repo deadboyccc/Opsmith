@@ -28,7 +28,8 @@ are in [`docs/development/architecture.md`](docs/development/architecture.md).
 ```bash
 uv run pytest tests/test_<area>.py -q    # iterate on the area you are touching
 make fmt                                 # auto-fix lint and formatting
-make check                               # everything CI runs: ruff, format, mypy, tests + coverage, docs links
+make check                               # ruff, format, mypy, tests + coverage floor, docs links
+make audit                               # known vulnerabilities in the locked dependencies
 ```
 
 What reviewers look for:

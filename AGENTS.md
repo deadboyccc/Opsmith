@@ -24,8 +24,9 @@ Where to read first:
 
 ```bash
 uv sync --all-extras                 # install (Python 3.12+, uv 0.9+)
-make check                           # everything CI runs: lint, format, mypy, tests+coverage, docs
-uv run pytest -q                     # tests (2-3 min); add -k <expr> to target, -m e2e for acceptance
+make check                           # lint, format, mypy, tests + coverage floor, docs (CI's main job)
+make audit                           # known vulnerabilities in the locked dependencies (CI runs it)
+uv run pytest -q                     # tests (4-6 min); add -k <expr> to target, -m e2e for acceptance
 uv run pytest tests/test_e2e.py      # spec §11 acceptance criteria, end to end
 uv run pytest -m docker              # tests that start real containers (skipped without Docker)
 uv run python scripts/check_docs.py  # docs: links, anchors, cited tests

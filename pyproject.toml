@@ -62,6 +62,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# A floor, not a target: CI fails when coverage drops below it. Raise it when coverage rises.
+fail_under = 93
 
 [tool.ruff]
 line-length = 100

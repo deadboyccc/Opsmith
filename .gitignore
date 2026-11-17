@@ -12,8 +12,8 @@ dist/
 .ruff_cache/
 .coverage
 coverage.xml
+.audit-requirements.txt
 htmlcov/
-
 # Local runtime data
 data/
 *.db

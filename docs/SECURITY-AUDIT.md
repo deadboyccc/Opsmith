@@ -36,7 +36,8 @@ configure projects, the API port behind a proxy.
 | | High | Medium | Low |
 |---|---|---|---|
 | Fixed in 1.2.2 | 2 | 6 | 4 |
-| Open | 0 | 2 | 5 |
+| Fixed in 1.2.3 | 0 | 0 | 1 |
+| Open | 0 | 2 | 4 |
 
 No vulnerable dependency, no secret in the code or its history, no use of unsafe
 deserialization (`pickle`, `yaml.load`, `eval`) and no weak cryptography were found.
@@ -178,9 +179,9 @@ per-key limit in the application would need shared state between API processes.
 - **O5. Template mining costs CPU in proportion to message length.** About ten thousand
   crafted 8,000-token messages cost a worker roughly an hour. *Recommended:* cap the tokens
   compared per message.
-- **O6. Workflow actions are pinned by tag, not by commit**, and the live-model workflow
-  pulls `ollama/ollama:latest`. *Recommended:* pin by digest. Tracked with the CI work
-  that follows this release.
+- **O6. Workflow actions were pinned by tag, not by commit**, and the live-model workflow
+  pulled `ollama/ollama:latest`. **Fixed in 1.2.3:** actions are pinned to a commit and the
+  image to a release.
 - **O7. API keys do not expire and cannot be rotated in place.** Documented. *Recommended:*
   expiry and SSO.
 
