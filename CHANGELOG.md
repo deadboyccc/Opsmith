@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.5.3 - 2026-11-17
+
 ### Changed
 
 - **Security problems are reported in the open,** with a new *Security problem* issue form,
