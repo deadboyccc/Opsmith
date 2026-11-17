@@ -4,6 +4,67 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.2.2 - 2026-11-17
+
+A security release: the result of an audit of the whole code base
+([Security audit](docs/SECURITY-AUDIT.md)). Upgrade if tenant admins other than yourself
+configure projects, or if the API port is reachable by anyone you do not trust.
+
+### Upgrade notes
+
+- **A `github` repository's `url` must be an `https://` URL without credentials, and every
+  repository's `default_branch` a plain branch name.** A repository that does not meet this
+  is refused when it is next used (its audits and executions fail with a message naming the
+  field) until it is corrected.
+- **Request bodies are limited** to 1 MiB, and to 32 MiB for pushed signals. A larger request
+  gets `413`.
+- **A file connector's `path` may not contain `..`.**
+- **Protected-path patterns cover more than before**: a pattern now also covers everything
+  below a directory it names. Nothing that was protected stops being protected. A pattern that
+  can never match is refused when settings are saved.
+- **A change that adds a file containing something credential-like is now refused even when
+  the file is binary.** A check command that leaves build output behind (compiled bytecode
+  holding a string from the source, for example) can trip this; ignore such files in the
+  repository's `.gitignore`.
+- A review's `comment` and `investigation` are limited to 20,000 characters. A redaction
+  pattern must match at least one character.
+
+### Security
+
+- **A repository's address and branch were handed to git unchecked.** A `github` repository
+  could name a directory on the worker, which made Opsmith clone any repository the worker
+  can read, another tenant's included, past `OPSMITH_LOCAL_ROOT`. A branch such as
+  `--upload-pack=<command>` ran that command on the worker, outside the sandbox, at the
+  repository's second audit. Both values are now checked when saved (API and `opsmith apply`)
+  and again on every use; git is told where its options end and, for GitHub, may use https
+  only.
+- **A credential placed after a form feed passed the push-time credential scan.** The diff
+  was split at form feeds, bare carriage returns and the Unicode separators as well as at
+  newlines, and the rest of the line was then never scanned.
+- **Protected-path patterns such as `infra/`, `/infra/**` or `./infra/**` matched nothing**,
+  so a directory its admin believed protected was not.
+- **A file-connector pattern could leave the local root** with a `..` after a wildcard, and
+  the refusal then named the file it had found: file names outside the root could be read one
+  pattern at a time. Contents were not exposed.
+- **Request bodies had no size limit** and are read before the key is checked.
+- **`/metrics` grew without bound**: the HTTP method was a label as the client sent it.
+- **Redaction missed credentials in common spellings**: JSON carried inside a JSON string,
+  `*_PASS` and `--pass`, `Authorization` with schemes other than Bearer and Basic, `Cookie`
+  headers, OpenAI project keys, PGP private key blocks, and fields named in the plural.
+- **A connector request had no total deadline**, only a timeout for each read.
+- The validation report quoted on a corrective retry could close its own data block. Review
+  text was unbounded. A redaction pattern that matched the empty string was accepted.
+
+### Fixed
+
+- **Epoch timestamps in milliseconds were masked as credit cards** one time in ten, which
+  inflated the redaction counts and changed log templates from one line to the next.
+
+### Added
+
+- [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md): what the audit looked for, what it
+  found, what was fixed and what is still open.
+
 ## 1.2.1 - 2026-11-17
 
 A bug-fix release. The whole code base was read for defects; each fix below has a test that

@@ -60,7 +60,8 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 |---|---|---|
 | The diff is gated after the last sandboxed command | Protected-path and credential checks run after the platform's own check run; nothing sandboxed runs between the gate and the commit. The sandbox home is removed by exact path first, and a link or file left in its place is deleted, not followed | `test_files_written_by_the_check_run_are_gated_too`, `test_files_named_like_the_sandbox_home_are_gated`, `test_a_sandbox_home_replaced_by_a_link_is_never_committed` |
 | File names cannot hide a protected path | Changed files are read from git's NUL-delimited output | `test_unusual_file_names_are_reported_verbatim`, `test_protected_path_gate_cannot_be_bypassed_by_file_name` |
-| Every added line is scanned for credentials | The diff parser only treats `+++` as a file header inside a header; the diff is read with `--text`, so a `-diff` or `binary` attribute cannot hide a file's lines | `test_added_lines_that_look_like_diff_headers_are_still_scanned`, `test_secret_gate_cannot_be_bypassed_by_line_prefix`, `test_secret_gate_reads_files_that_git_would_show_as_binary`, `test_secret_scan_survives_binary_files_in_the_diff` |
+| Every added line is scanned for credentials | The diff parser only treats `+++` as a file header inside a header; the diff is read with `--text`, so a `-diff` or `binary` attribute cannot hide a file's lines. The diff is read as bytes and split at newlines only, so a form feed, a bare carriage return or a Unicode separator cannot cut a line in two and hide its second half | `test_added_lines_that_look_like_diff_headers_are_still_scanned`, `test_secret_gate_cannot_be_bypassed_by_line_prefix`, `test_secret_gate_reads_files_that_git_would_show_as_binary`, `test_secret_scan_survives_binary_files_in_the_diff`, `test_a_secret_after_a_line_break_lookalike_is_still_scanned`, `test_secret_gate_cannot_be_bypassed_with_a_form_feed` |
+| A protected path is protected however its pattern is written | A pattern covers what it matches as a glob and everything below a directory it names; a leading `/` or `./` is ignored; a pattern that can never match is refused when saved | `test_a_directory_pattern_protects_the_directory_however_it_is_spelled`, `test_a_protected_path_pattern_that_can_never_match_is_refused` |
 | Pushes go only to `opsmith/...` branches, never the default branch | `scm.base.check_pushable` in every provider; branch names are validated | `test_pushes_stay_inside_the_opsmith_branch_namespace`, `test_github_refuses_default_branch_and_missing_token` |
 | No merge | The provider interface has no such method | `test_scm_interface_has_no_merge_capability` |
 
@@ -73,6 +74,7 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | The unconfined `local` backend cannot run real repositories | `sandbox_policy_error`: `local` only for the `local` SCM provider | `test_local_sandbox_is_refused_for_remote_repositories` |
 | No silent downgrade when Docker is missing | `SandboxUnavailable`; the task returns to review | `test_missing_docker_fails_closed`, `test_sandbox_backend_defaults_to_docker_and_is_validated` |
 | Sandboxed code cannot make the worker run something | Git metadata is snapshotted before the agent starts; later git commands use only the snapshot, with hooks and fsmonitor disabled. A nested repository (whose config git would read when it descends into a submodule) refuses the execution before the platform runs git on the workspace | `test_git_hooks_and_config_planted_by_sandboxed_code_never_run`, `test_a_nested_repository_planted_by_sandboxed_code_is_refused` |
+| Repository settings cannot make git run something on the worker | A repository's address and default branch are checked when saved and again by the provider on every use: an https URL without credentials for GitHub, a plain branch name. git gets `--` before them and, for GitHub, may use https only | `test_a_github_repository_must_be_an_https_url_and_a_plain_branch`, `test_the_github_provider_refuses_a_stored_repository_it_must_not_fetch`, `test_a_local_repository_branch_cannot_be_a_git_option`, `test_apply_checks_a_repository_like_the_api_does` |
 | The agent stays inside the checkout | `Workspace.resolve` rejects absolute paths, `..`, symlinks out, and `.git` at any depth | `test_workspace_confinement`, `test_workspace_refuses_oversized_reads`, `test_the_agent_cannot_write_into_a_nested_git_directory` |
 | The agent's environment holds no credentials | Scrubbed environment; the remote is removed | `test_sandbox_environment_is_scrubbed` |
 | A timeout kills everything the command started | Process group kill (local); container kill by name (Docker) | `test_local_sandbox_timeout_kills_the_whole_process_group`, `test_docker_sandbox_really_isolates` |
@@ -82,7 +84,7 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | Guarantee | Enforcement | Tests |
 |---|---|---|
 | Secrets and PII are redacted before storage and before every model call | `redaction.py`, applied in ETL and in `LLMGateway` | `tests/test_redaction.py`, `test_gateway_redacts_before_provider_and_guards_injection` |
-| Untrusted text cannot escape its data block in a prompt | The payload is escaped so it cannot contain the closing tag | `test_untrusted_content_cannot_close_its_own_data_block` |
+| Untrusted text cannot escape its data block in a prompt | The payload is escaped so it cannot contain the closing tag; so is the validator's report quoted on a corrective retry | `test_untrusted_content_cannot_close_its_own_data_block`, `test_the_validation_report_cannot_close_its_own_framing` |
 | Invented ids and evidence are discarded | The orchestrator checks every reference against the run's input | `test_untrusted_model_output_is_contained` |
 | Only allowed providers receive data | Process allowlist intersected with the project's, for every provider | `test_provider_allowlist_is_enforced`, `test_openai_provider_is_subject_to_the_allowlists` |
 | Project configuration cannot redirect model calls | Model endpoints and their keys are operator settings; a project chooses only a provider name and a model | `test_settings_and_default_gateway` |
@@ -100,7 +102,9 @@ Every row names the tests that try to break the guarantee. They live in `tests/`
 | Objects cannot be linked across projects | Project checks on create and trigger | `test_objects_cannot_be_linked_or_triggered_across_projects` |
 | API keys are not stored | SHA-256 hashes only; the key is shown once | `tests/test_cli.py` |
 | A credential reference cannot name the platform's secrets or arbitrary files | `config.check_credentials_ref`: no `OPSMITH_*`, database or model-provider key variables; `file:` only under `OPSMITH_SECRETS_DIR`, and never the file holding a model-provider key | `test_tenant_credential_references_cannot_reach_platform_secrets`, `test_configuration_input_is_validated`, `test_values_too_large_to_schedule_are_refused_when_saved` |
-| Configuration cannot point the worker at arbitrary host files | File connectors and `local` repositories must resolve inside `OPSMITH_LOCAL_ROOT` and outside the data directory; unset means disabled | `tests/test_ingestion_hardening.py` |
+| Configuration cannot point the worker at arbitrary host files | File connectors and `local` repositories must resolve inside `OPSMITH_LOCAL_ROOT` and outside the data directory; unset means disabled. A file pattern may not contain `..`, and a refusal never names the file a pattern matched. A `github` repository cannot be a path on the worker | `tests/test_ingestion_hardening.py`, `test_file_connector_glob_cannot_climb_out_or_name_what_it_finds`, `test_a_github_repository_must_be_an_https_url_and_a_plain_branch` |
+| A caller without a key cannot exhaust the process | Request bodies are limited before they are read (1 MiB; 32 MiB for pushed signals); the metrics labels are a fixed set; a connector request has a total deadline as well as a read timeout | `test_a_request_body_over_the_limit_is_refused_before_it_is_read`, `test_unknown_http_methods_share_one_metrics_label`, `test_a_connector_request_has_a_total_deadline` |
+| Input is bounded where it is stored | Review text, edited fields, settings and identifiers are limited to their columns; a redaction pattern must match at least one character | `test_review_text_is_bounded`, `test_a_redaction_pattern_that_matches_nothing_at_all_is_refused`, `test_values_longer_than_their_columns_are_refused_when_saved` |
 | The UI resists cross-site requests | HttpOnly, SameSite=Strict cookie; the `Origin` of every form post is checked; strict Content-Security-Policy. The API accepts the UI's cookie for reads only; a call that changes something needs the key in a header | `tests/test_ui_hardening.py`, `test_the_api_takes_the_ui_cookie_for_reading_only`, `test_health_metrics_and_security_headers` |
 
 ### Reliability that safety depends on
@@ -125,7 +129,12 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
   tenant. Run a separate deployment for parties that do not trust each other.
 - **Connector URLs can reach your private network.** Loki and Prometheus usually live there, so
   private and loopback addresses are allowed. Link-local addresses (cloud metadata endpoints)
-  are refused. DNS rebinding is not defended against.
+  are refused. DNS rebinding is not defended against. The same holds for a GitHub
+  repository's https address, which may name any host (GitHub Enterprise).
+- **A signal named by the model is trusted.** Evidence references are checked against what
+  the model was shown; the `signal` of a finding is not. A finding with valid evidence and an
+  invented signal is verified, after its fix is merged, against a signal that never recurs.
+  See the [security audit](../SECURITY-AUDIT.md).
 - **The worker with the sandbox overlay holds the Docker socket,** which is root on that host.
   The sandboxed code never gets the socket, but a compromise of the worker itself would.
 - **The Docker sandbox is a container, not a virtual machine.** A kernel or container-runtime
@@ -165,7 +174,8 @@ Be clear-eyed about these. None is hidden in the code; all are choices or open w
       `OPSMITH_OPENAI_BASE_URL` points where you mean it to.
 - [ ] Budgets are set to what you are willing to spend per run and per day.
 - [ ] Protected paths cover your CI configuration, authentication code and secrets.
-- [ ] The API is behind TLS; `/metrics` and `/healthz` are not public.
+- [ ] The API is behind TLS; `/metrics` and `/healthz` are not public. The proxy limits
+      request size and rate (Opsmith limits size, not rate).
 - [ ] `service` keys go to collectors; people get `viewer`, `reviewer` or `admin` keys.
 - [ ] Dead jobs and failed executions notify someone.
 

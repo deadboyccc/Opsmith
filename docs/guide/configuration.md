@@ -129,6 +129,8 @@ audit_types = ["security", "bugs", "dependency", "compliance", "performance"]
 | Key | Meaning |
 |---|---|
 | `scm_provider` | `github`, or `local` for a git repository on the worker's disk (development and the demo). A `local` repository's `url` is a path and must be inside `OPSMITH_LOCAL_ROOT` |
+| `url` | For `github`: an `https://` clone URL, without credentials in it. Nothing else is accepted (no path, `file://`, `ssh://` or `http://`), because the value is handed to git on the worker |
+| `default_branch` | A plain branch name: letters, digits, `.`, `_`, `-` and `/`, starting with a letter or digit, at most 100 characters |
 | `credentials_ref` | Where the token comes from. See [Credentials](#credentials) and the [token permissions](deployment.md#connecting-a-github-repository) |
 | `build_command`, `lint_command`, `test_command` | The checks. Each is optional. They run **only inside the sandbox**, where there is **no network**: they must work with what the sandbox image already contains. Do not put `pip install` or `npm ci` in them |
 | `audit_types` | Which audits run: `security`, `bugs`, `compliance`, `performance`, `dependency`, `coverage` |
@@ -196,7 +198,7 @@ Common behaviour of the pull connectors:
 | `limit` | 5000 | Entries per page. Results are paged, up to 20 pages per run; a window with more than that is continued on the next run rather than cut off |
 | `service_label` | `service_name` | The stream label that names the service |
 | `environment` | the linked service's, else `production` | Environment for streams without an `env` or `environment` label |
-| `timeout` | 30 | Seconds, at most 120 |
+| `timeout` | 30 | Seconds for each read, at most 120. A whole request may take four times as long |
 | `lag_seconds` | 60 | See above |
 
 A line that is JSON is read for its level, message and other fields.
@@ -224,7 +226,7 @@ Read files on the worker. For development, tests and simple setups. The path mus
 
 | `config` key | Default | Meaning |
 |---|---|---|
-| `path` | required | A file or glob, for example `/var/log/app/*.jsonl` |
+| `path` | required | A file or glob, for example `/var/log/app/*.jsonl`. It may not contain `..` |
 | `format` (logs) | `jsonl` | `jsonl`, or `text` for plain lines |
 | `timestamp_field`, `message_field`, `severity_field`, `service_field` (logs, jsonl) | `timestamp`, `message`, `level`, `service` | Field names in your JSON |
 | `pattern` (logs, text) | `timestamp LEVEL [service] message` | A regular expression with named groups. `timestamp` is required; `severity`, `service` and `message` are optional |
@@ -277,7 +279,10 @@ The three rules above are the defaults. Setting `protected_paths` replaces them,
 ones you want to keep.
 
 Patterns are shell-style globs matched against the path from the repository root; `*` also
-matches `/`. A leading `**/` also matches at the root.
+matches `/`. A leading `**/` also matches at the root. A pattern also covers everything
+below a directory it names, and a leading `/` or `./` is ignored: `infra`, `infra/`,
+`/infra/**` and `infra/**` all protect the `infra` directory. A pattern that could never
+match (empty, or containing `..`) is refused when you save it.
 
 The rules are applied twice: to the paths a task names when it is created or edited, and to
 the files the agent **actually changed**. The second check is the one that counts: a task that
@@ -373,9 +378,9 @@ Delivery is a queued job: a failed delivery is retried, then dead-lettered.
 ## Redaction
 
 Opsmith redacts common secrets and personal data on its own: private keys, cloud and API
-tokens, bearer and basic credentials, credentials in URLs, `password=`-style assignments,
-values of sensitive-looking keys, email addresses, card numbers, phone numbers and IP
-addresses. Add patterns for formats specific to you:
+tokens, `Authorization` and `Cookie` headers, credentials in URLs, `password=`-style
+assignments (also inside JSON carried in a string), values of sensitive-looking keys, email
+addresses, card numbers, phone numbers and IP addresses. Add patterns for formats specific to you:
 
 ```toml
 [projects.settings]
@@ -383,7 +388,7 @@ redaction_extra_patterns = ['ACME-[0-9]{8}', 'session=[A-Za-z0-9]+']
 ```
 
 Each match is replaced by a marker such as `[REDACTED:custom_0]`. Patterns are validated when
-saved. See the limits of pattern-based redaction in
+saved: each must be a valid regular expression that matches at least one character. See the limits of pattern-based redaction in
 [Security](security.md#what-is-not-protected).
 
 ## Credentials

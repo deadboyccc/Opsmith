@@ -17,6 +17,7 @@ For people who run it: evaluating it, configuring projects, operating a deployme
 | [Operations](guide/operations.md) | Monitor it, upgrade it, troubleshoot it |
 | [API](guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](guide/security.md) | Know what is guaranteed, how, which test proves it, and what is not protected |
+| [Security audit](SECURITY-AUDIT.md) | See what the last audit looked for, what it found and fixed, and what is still open |
 | [Compatibility](guide/compatibility.md) | See which versions of Loki, Prometheus, GitHub, models, Python, PostgreSQL and Docker are verified, and how |
 
 ## Developing Opsmith
@@ -30,6 +31,7 @@ For people who change it.
 | [Architecture](development/architecture.md) | Understand the internals: processes, the job pipeline, the model layer, the execution path, the code map, plugins |
 | [Testing](development/testing.md) | Run and write tests, including on PostgreSQL, with real containers and against a live model |
 | [Architecture decisions](../ARCHITECTURE_DECISIONS.md) | See why each design choice was made, and the known limitations |
+| [Decisions](DECISIONS.md) | See how individual fixes and tooling choices were decided, and what was left open on purpose |
 | [Changelog](../CHANGELOG.md) | See what changed |
 | [Repository About text](development/repository-about.md) | Copy-paste the description, website and topics for the GitHub About section |
 

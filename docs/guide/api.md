@@ -184,6 +184,9 @@ the response's `records` says how many were stored.
 | `elevated_ack` | `true` to approve a task that touches `elevated` protected paths. Admins only |
 | `expected_version` | The task `version` you loaded. If the task changed since (for example new evidence arrived), the review is refused so you can look again |
 
+A `comment` or `investigation` may be up to 20,000 characters; an edited list (paths,
+acceptance criteria) up to 200 items of 5,000 characters.
+
 Only tasks in `in_review` can be reviewed. An approval covers the task exactly as it is at that
 moment; if its scope changes before or during execution, the execution is refused and the task
 comes back to the queue.
@@ -196,5 +199,6 @@ comes back to the queue.
 | `403` | The key's role may not do this |
 | `404` | No such object in your tenant |
 | `409` | Conflict: a duplicate name, a task that is not in a reviewable state, a stale `expected_version`, a job that is not dead |
-| `413` | More than 10,000 records in one push |
+| `400` | A `Content-Length` that is not a number |
+| `413` | A request body over 1 MiB (32 MiB for a push), or more than 10,000 records in one push |
 | `422` | Invalid input. The body lists what is wrong |

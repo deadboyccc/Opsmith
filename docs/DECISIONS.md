@@ -112,7 +112,7 @@ costed at zero.
   references are checked against the input; `signal` is not, and post-merge verification
   later watches that signal. Dropping unknown signals changes how findings are fingerprinted
   and what existing tests assert, so it needs a design decision, not a patch. Recorded in the
-  security audit that follows this release.
+  [security audit](SECURITY-AUDIT.md).
 - **Leads age on runs without new data.** Already listed under known limitations in
   `ARCHITECTURE_DECISIONS.md`.
 - **A bundle can still lose its log templates to a large number of anomalous metric series.**
@@ -121,3 +121,57 @@ costed at zero.
 - **`opsmith apply` creates a repository as `local` when `scm_provider` is left out; the API
   defaults to `github`.** Changing either default would change what existing files and
   clients do.
+
+## Security audit (1.2.2)
+
+### Repository addresses are checked in three places
+
+When saved through the API, when applied from a file, and by the providers every time they
+are about to call git. The last one matters most: it also covers rows that were written
+before the check existed, or by something other than the API. The rule is deliberately
+narrow (`https://` without credentials; a branch that starts with a letter or digit) rather
+than a list of known-bad values, because an allowlist does not have to anticipate the next
+git option.
+
+- **Not chosen:** restricting the host to `github.com`. GitHub Enterprise runs on other
+  hosts, and the token is the tenant's own.
+
+### Protected-path patterns got more permissive in what they match, not stricter in what they accept
+
+`infra/`, `/infra/**` and `./infra/**` used to match nothing. Rejecting those spellings would
+break settings that are already stored and leave the directory unprotected until someone
+noticed. Instead a pattern now also covers everything below a directory it names, which can
+only add protection. Only patterns that cannot match at all (empty, `..`) are refused.
+
+### The body limit is a constant, not a setting
+
+1 MiB per request and 32 MiB for a push are far above what any route needs and far below
+what would hurt. A setting would be one more thing to document and get wrong; a deployment
+that needs a different limit sets it at its proxy, which is where rate limiting belongs too.
+
+### The body limit answers 413 itself
+
+FastAPI turns any error raised while it reads the body into its own `400`. So the
+middleware cannot raise: when the count goes over the limit it sends the `413`, tells the
+application the client has disconnected, and drops whatever the application sends after.
+
+### Redaction: only spellings with a clear shape were added
+
+Each new pattern has a negative test next to it (`bypass=`, `compass:` are left alone). The
+looser a credential pattern, the more ordinary log text it destroys, and redacted text also
+changes how log lines cluster into templates. Secrets without a recognizable shape remain
+the job of `redaction_extra_patterns`.
+
+### A binary file that contains a credential-like string is refused
+
+Fixing the line splitting made the scan see whole lines of binary files, where it used to
+see fragments. A real-container test showed the consequence: a `.pyc` written by a check
+command contains the string literals of its source, including a key that was already in the
+repository. That is a correct refusal (a new file with a credential in it), so the test's
+check was changed to compile in memory, and the behaviour is called out in the upgrade notes.
+
+### What the audit left open
+
+Listed with reasons in [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md#open-findings): the model's
+own `signal` being trusted, no rate limiting in the application, shared tenancy, private
+hosts as addresses, the CPU cost of template mining, and actions pinned by tag.
