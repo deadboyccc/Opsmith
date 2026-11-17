@@ -44,6 +44,7 @@ def run_git(
     author: tuple[str, str] | None = None,
     git_dir: Path | None = None,
     errors: str = "strict",
+    protocols: tuple[str, ...] | None = None,
 ) -> str:
     """Run one git command.
 
@@ -53,10 +54,16 @@ def run_git(
 
     Output is decoded as strict UTF-8 by default, so a file name is never silently altered.
     ``errors="replace"`` is for output that contains file contents, such as a ``--text`` diff.
+    ``protocols`` limits the transports git may use to the ones named.
     """
     cmd = ["git"]
     for item in _SAFE_CONFIG:
         cmd += ["-c", item]
+    if protocols is not None:
+        # Only these transports, for the address given and for anything it redirects to.
+        cmd += ["-c", "protocol.allow=never"]
+        for protocol in protocols:
+            cmd += ["-c", f"protocol.{protocol}.allow=always"]
     if token:
         # Credentials go in a transient header for this one command only; they are never
         # written to .git/config or exposed to the sandboxed agent.
@@ -78,12 +85,12 @@ def run_git(
         extra["GIT_DIR"] = str(git_dir)
         extra["GIT_WORK_TREE"] = str(cwd)
     try:
+        # Bytes, decoded below: a text-mode pipe turns "\r" and "\r\n" into "\n", which
+        # changes file names and splits a diff line in two (see ``staged_added_lines``).
         proc = subprocess.run(
             cmd,
             cwd=cwd,
             capture_output=True,
-            text=True,
-            errors=errors,
             timeout=timeout,
             env=git_env(extra),
             check=False,
@@ -91,11 +98,11 @@ def run_git(
     except subprocess.TimeoutExpired as exc:
         raise GitError(f"git {args[0]} timed out") from exc
     if proc.returncode != 0:
-        stderr = proc.stderr.strip()
+        stderr = proc.stderr.decode("utf-8", "replace").strip()
         if token:
             stderr = stderr.replace(token, "***")
         raise GitError(f"git {' '.join(args[:2])} failed: {stderr[-800:]}")
-    return proc.stdout
+    return proc.stdout.decode("utf-8", errors)
 
 
 def head_sha(repo: Path, *, git_dir: Path | None = None) -> str:
@@ -180,7 +187,10 @@ def staged_added_lines(repo: Path, *, git_dir: Path | None = None) -> list[tuple
     path: str | None = None
     line_no = 0
     in_header = False
-    for line in diff.splitlines():
+    # Split at "\n" only. ``str.splitlines`` also breaks at form feeds, bare carriage returns
+    # and the Unicode separators; the rest of an added line would then not start with "+"
+    # and would never be scanned.
+    for line in diff.split("\n"):
         if line.startswith("diff --git "):
             in_header, path = True, None
         elif in_header and line.startswith("+++ "):

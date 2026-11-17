@@ -893,11 +893,10 @@ def test_full_execution_through_the_docker_sandbox(platform, seed, drain) -> Non
     platform.settings.sandbox_image = image
     # The sandbox has no network, so checks can only use what the image already contains.
     # The demo repository needs httpx, which a bare Python image lacks; compile instead.
-    _set_repo(
-        platform,
-        seed,
-        test_command="python -m py_compile app/payments.py && grep -q 'timeout=10' app/payments.py",
-    )
+    # In memory: a .pyc written next to the source would be a new file in the diff, and it
+    # holds the demo's planted key, which the credential gate rightly refuses.
+    compiles = """python -c "compile(open('app/payments.py').read(), 'payments.py', 'exec')\""""
+    _set_repo(platform, seed, test_command=f"{compiles} && grep -q 'timeout=10' app/payments.py")
     task_id = make_task(platform, seed)
     approve(platform, seed, task_id)
     drain()
@@ -1057,3 +1056,32 @@ def test_agent_budget_stops_on_tokens_or_cost() -> None:
     assert budget.exhausted(1000, 0.0) == "Token budget exhausted."
     assert budget.exhausted(10, 0.5) == "Cost budget exhausted."
     assert AgentBudget().exhausted(10, 1_000_000.0) is None  # no cost cap unless one is given
+
+
+# --------------------------------------------------------------------------- security audit (1.2.2)
+
+LINE_BREAK_LOOKALIKES = [chr(c) for c in (0x0B, 0x0C, 0x0D, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)]
+
+
+@pytest.mark.parametrize("separator", LINE_BREAK_LOOKALIKES)
+def test_a_secret_after_a_line_break_lookalike_is_still_scanned(
+    tmp_path: Path, separator: str
+) -> None:
+    """``str.splitlines`` splits at form feeds, bare carriage returns and the Unicode
+    separators as well as at newlines. The second half of an added line then no longer
+    started with ``+`` and was never scanned: a credential placed after one of these
+    characters passed the push-time credential gate."""
+    repo = _git_repo(tmp_path / "r")
+    (repo / "keys.py").write_text(f'# note{separator}K = "{FAKE_AWS_KEY}"\n', newline="")
+    added = staged_added_lines(repo)
+    assert any(FAKE_AWS_KEY in text for _, _, text in added)
+
+
+def test_secret_gate_cannot_be_bypassed_with_a_form_feed(platform, seed, drain) -> None:
+    task_id = make_task(platform, seed)
+    content = f'# generated\x0cK = "{FAKE_AWS_KEY}"\n'
+    _use_agent(platform, seed, EditingAgent("app/keys.py", content))
+    approve(platform, seed, task_id)
+    drain()
+    assert "credential-like" in task(platform, task_id).execution_report["error"]
+    assert not _pr_branches(seed)
