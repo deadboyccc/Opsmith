@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.4.1 - 2026-11-17
+
 ### Fixed
 
 - **`opsmith run` could not start on a new SQLite database.** Its API, worker and scheduler
