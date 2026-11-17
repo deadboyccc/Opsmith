@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from opsmith import __version__
 from opsmith.api import routes, ui
@@ -27,6 +28,59 @@ API_REFERENCE_CSP = (
     "font-src https://fonts.gstatic.com; worker-src blob:; "
     f"img-src 'self' data: https://fastapi.tiangolo.com {_CDN}; frame-ancestors 'none'"
 )
+
+
+_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+# Bodies are read and parsed before the key is checked, so their size is bounded here, for
+# every caller. Pushed signals (up to 10,000 records) get their own, larger limit.
+MAX_BODY_BYTES = 1024 * 1024
+MAX_PUSH_BODY_BYTES = 32 * 1024 * 1024
+
+
+class BodyLimit:
+    """Refuse a request whose body is over the limit: by its ``Content-Length`` when it has
+    one, and by counting the bytes as they arrive when it has not."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = MAX_PUSH_BODY_BYTES if scope["path"].endswith("/push") else MAX_BODY_BYTES
+        declared = dict(scope["headers"]).get(b"content-length", b"0")
+        if not declared.isdigit():
+            await JSONResponse({"detail": "invalid Content-Length"}, 400)(scope, receive, send)
+            return
+        too_large = JSONResponse({"detail": f"request body is over {limit} bytes"}, 413)
+        if int(declared) > limit:
+            await too_large(scope, receive, send)
+            return
+        seen = 0
+        refused = False
+
+        async def counted() -> Message:
+            # Raising from here would not do: the framework turns an error while it reads the
+            # body into its own 400. So the refusal is sent from here, the application is
+            # told the client has gone, and whatever it then tries to send is dropped.
+            nonlocal seen, refused
+            if refused:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    refused = True
+                    await too_large(scope, receive, send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def unless_refused(message: Message) -> None:
+            if not refused:
+                await send(message)
+
+        await self.app(scope, counted, unless_refused)
 
 
 def create_app(platform: Platform | None = None) -> FastAPI:
@@ -66,7 +120,10 @@ def create_app(platform: Platform | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
-        with METRICS.timer("opsmith_http_seconds", method=request.method):
+        # A fixed set of labels: the server accepts any token as a method, and each new label
+        # value is a set of series kept for the life of the process.
+        method = request.method if request.method in _METHODS else "OTHER"
+        with METRICS.timer("opsmith_http_seconds", method=method):
             response: Response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
@@ -77,4 +134,5 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         )
         return response
 
+    app.add_middleware(BodyLimit)  # outermost: runs before a body is read or parsed
     return app
