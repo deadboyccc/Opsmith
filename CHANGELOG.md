@@ -32,6 +32,13 @@ the database schema says so under *Upgrade notes*.
   killing an execution, backup commands, keeping the sandbox overlay on upgrades, the `Host`
   header behind a proxy, revoking a key, the check stage's context size, which settings
   `opsmith apply` replaces, and what `succeeded` means for a check run.
+- `AGENTS.md` is reorganized for agents: the invariants come first, then *How to work* in six
+  phases (start from a known state, change with care, prove it, keep the docs true, ship,
+  keep the workspace safe), with new rules to stay in scope, plan a cross-module change,
+  verify claims before acting, count only runs you saw, scan what leaves before a push, clean
+  up, know when to ask, and end with a report. It also gains the Claude API rules.
+  `CLAUDE.md` no longer repeats `AGENTS.md`: it lists the steps most often skipped and what is
+  specific to Claude Code.
 
 ### Upgrade notes
 

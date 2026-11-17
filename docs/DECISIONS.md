@@ -472,3 +472,18 @@ The security policy keeps reports private (GitHub's private vulnerability report
 email), as the security guide already said, because a public issue would announce an unfixed
 vulnerability. Private reporting must be switched on in the repository settings by an admin.
 
+### How the agent instructions are organized
+
+`AGENTS.md` was reorganized around how an agent works through a task. The invariants come
+first, because they override everything else and an agent reads from the top. *How to work*
+follows in six phases with one numbered rule each, so a rule can be cited, and ends with the
+closing report. New rules write down what kept this session's work correct: stay in scope,
+plan a cross-module change, verify a reviewer's or tool's claim before applying it, count only
+runs you saw, scan what leaves before a push, clean up, and ask when the decision is the
+maintainer's.
+
+`CLAUDE.md` imports `AGENTS.md`, so repeating it there only spent context and invited drift.
+It now lists the steps most often skipped, with their rule numbers, and what is specific to
+Claude Code: task lists, subagents, long runs, tokens and the Claude API patterns with their
+reasons. Not chosen: moving the Claude API reasons into `AGENTS.md` (they matter only to
+whoever edits that code, and `AGENTS.md` carries the rules themselves).

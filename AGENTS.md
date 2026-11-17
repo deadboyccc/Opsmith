@@ -1,13 +1,14 @@
 # AGENTS.md
 
-Guidance for AI coding agents and human contributors working on this repository.
-This file is canonical; tool-specific files (`CLAUDE.md`) import it rather than repeat it.
+Instructions for AI coding agents and for people working on this repository. This file is
+canonical. `CLAUDE.md` imports it and adds only what is specific to Claude Code.
 
 ## What this is
 
 Opsmith is an engineering-ops platform. It ingests logs, metrics and code, runs chained LLM
-analysis with carried-over leads plus scheduled repo audits, turns the results into ranked tasks,
-and, **only after a recorded human approval**, has a sandboxed subagent open a PR.
+analysis with carried-over leads plus scheduled repo audits and checks, turns the results into
+ranked tasks, and, **only after a recorded human approval**, has a sandboxed subagent open a
+PR.
 
 Where to read first:
 
@@ -22,131 +23,11 @@ Where to read first:
 | How past fixes and tool choices were decided | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | What the last security audit found and left open | [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md) |
 
-## How every session works
-
-Opsmith decides what code an AI agent may change on other people's repositories. Stability,
-robustness, reliability and security come before speed and before features. Every session,
-by a person or an agent, follows these rules.
-
-**Start from a known state.**
-
-1. Read this file, then the docs for the area you will touch, and the ADR behind it.
-2. Run `make check` before changing anything, and note the result. If it is not green, find
-   out why before you add to it. Never build on a red baseline without saying so.
-
-**Change the code with care.**
-
-3. Follow the conventions below and the code around you. Choose the correct, simple and
-   readable solution over the clever one; a reviewer must be able to see that it is right.
-4. Every change comes with tests: the happy path, the failure path and, for anything that
-   guards safety, a negative test that shows the bad path is blocked.
-5. **A bug fix starts with a failing test.** Write the test that reproduces the bug, run it,
-   and see it fail for the reason you expect. Then fix the code and see it pass. The test
-   stays, as the regression test.
-6. Secure by default. Validate input at the edge and bound it to what stores it. Keep
-   untrusted data as data. Never weaken an invariant below, never add a secret, credential,
-   real customer data or token to code, tests, fixtures, logs or commits, and never add an
-   unsafe pattern (`shell=True`, `eval`, `pickle`, string-built SQL, unconfined paths,
-   unbounded reads, calls without timeouts).
-7. Never hide a failure: no bare `except` that swallows, no skipped test to get green, no
-   retry that masks a bug. A failure surfaces (see *No silent drops*).
-
-**Prove it before you call it done.**
-
-8. Run `make check` again after the change, plus `make site` when docs changed. Run the
-   suite on PostgreSQL when you touched models or queries, and `uv run pytest -m docker`
-   when you touched the sandbox or the executor and Docker is available. Report failures
-   with their output; never describe a red run as green.
-9. Never merge, and never ask for a merge, with a regression: a test that passed before must
-   pass after, coverage must stay above the floor, and the build must be clean.
-
-**Leave the docs true. Every session ends with these, without exception.**
-
-10. **Update the Markdown docs** your change affects: the pages under `docs/`, the README,
-    this file, `CONTRIBUTING.md`. A behaviour the docs do not describe, or describe wrongly,
-    is a bug.
-11. **Update the documentation site.** It is built from those same pages, so it changes when
-    they do; add a new page to `nav` in `mkdocs.yml`, and run `make site` to prove it builds
-    with no broken link.
-12. **Update `CHANGELOG.md`** under *Unreleased* (Keep a Changelog: Added, Changed, Fixed,
-    Security, with *Upgrade notes* for anything an operator must do). The site's changelog
-    page is this file, so updating it updates the site.
-13. **Record significant decisions in `docs/DECISIONS.md`**, with the reasoning and the
-    options not taken: a choice between workable designs, a tool, something left open on
-    purpose. Design decisions about the system itself also get an ADR in
-    `ARCHITECTURE_DECISIONS.md`.
-
-**Ship every change, with docs that already describe it.**
-
-14. **Every commit carries its changelog entry, and every change that reaches `main` is
-    released.** A commit that changes the product, its docs or its tooling adds its entry
-    under *Unreleased* in the same commit. When it lands on `main`, release it at once: move
-    the entries under `## <version> - <yyyy-mm-dd>` (a patch version for fixes, a minor one
-    for features), set that version in `pyproject.toml` and `src/opsmith/__init__.py`, tag
-    `v<version>`, and publish a GitHub Release whose notes are that changelog section. Do not
-    let unreleased changes collect on `main`.
-15. **Before every push, the docs and the site are up to date.** The Markdown pages, the
-    README and `CHANGELOG.md` describe the change, every new page is in `nav`, and `make
-    site` builds with no warning. After a push to `main`, check that the *Docs* workflow
-    deployed GitHub Pages and that the live site shows the new version and changelog; a
-    failed deploy is fixed before other work.
-
-## Commands
-
-```bash
-uv sync --all-extras                 # install (Python 3.12+, uv 0.9+)
-make check                           # lint, format, mypy, tests + coverage floor, docs (CI's main job)
-make audit                           # known vulnerabilities in the locked dependencies (CI runs it)
-make site                            # build the documentation site, strict (make site-serve to preview)
-uv run pytest -q                     # tests (4-6 min); add -k <expr> to target, -m e2e for acceptance
-uv run pytest tests/test_e2e.py      # spec §11 acceptance criteria, end to end
-uv run pytest -m docker              # tests that start real containers (skipped without Docker)
-uv run python scripts/check_docs.py  # docs: links, anchors, cited tests
-uv run ruff check src tests --fix && uv run ruff format src tests
-uv run mypy                          # strict-ish typing on src/
-uv run opsmith demo --dir /tmp/demo  # full offline loop: ingest -> ... -> PR -> verified
-make docker-test                     # same checks inside the dev image (no local Python needed)
-```
-
-The whole suite also runs on PostgreSQL. Point `OPSMITH_TEST_DATABASE_URL` at a server whose
-user may create databases; each test then gets its own database:
-
-```bash
-docker run -d --name pg -e POSTGRES_USER=opsmith -e POSTGRES_PASSWORD=opsmith -p 5432:5432 postgres:18.6-alpine3.24
-OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith uv run pytest -q
-```
-
-## Repository map
-
-| Path | Responsibility |
-|---|---|
-| `src/opsmith/platform.py` | Composition root and queue handler wiring. Start here. |
-| `models.py`, `schemas.py` | ORM entities (all tenant-scoped) / pydantic contracts incl. settings and LLM stage I/O |
-| `migrations/` | Alembic revisions of the schema, applied by every process at start (ADR-002) |
-| `queue.py`, `scheduler.py` | Durable idempotent jobs with leased, heartbeated claims; cron/interval schedules |
-| `audit_log.py` | Append-only audit trail, task/lead state machines, run immutability |
-| `config.py`, `localfs.py` | Process settings and credential references; confinement of host-file access |
-| `connectors/`, `etl/` | Signal sources; normalize → enrich → redact → store → bundle |
-| `redaction.py` | Secret/PII detectors shared by ETL, the gateway and the diff gate |
-| `llm/` | `LLMGateway` (the only path to a model), prompts, pricing, providers |
-| `inference/orchestrator.py` | Chained runs, lead carry/confirm/refute/expire |
-| `audits/` | Analyzers (built-in + external tools), the audit runner, and checks (`checks.py`): admin-written instructions a model carries out on the code (ADR-019) |
-| `aggregation/` | Correlation, dedup/suppression, scoring, task drafting |
-| `review.py` | Human review gate and the approval scope digest |
-| `executor/` | Sandboxes, workspace confinement, coding agents, execution service, PR body |
-| `gitutil.py` | The only place git is invoked: safe config, trusted git dir, unambiguous parsing |
-| `scm/` | GitHub + local providers. **No merge operation, by design.** Repository addresses and branches are checked before git sees them (`scm.base.check_repository`) |
-| `tracking.py` | PR/CI tracking, post-merge verification |
-| `api/`, `ui/` | FastAPI JSON API (`/api/v1`) and server-rendered UI (`/ui`) |
-| `tests/` | Unit/integration tests; `conftest.py` seeds a tenant, users, project, git repo. `test_hardening.py` holds the adversarial tests, `test_runtime.py` the process loops |
-| `docs/`, root `*.md` | The documentation. `docs/guide/` for people running Opsmith, `docs/development/` for people changing it, `docs/DECISIONS.md` and `docs/SECURITY-AUDIT.md` for the record |
-| `mkdocs.yml`, `site/`, `scripts/build_site.py` | The documentation site: every Markdown page, published to GitHub Pages by `.github/workflows/docs.yml` |
-| `scripts/check_docs.py` | Fails the build when the docs and the code disagree (links, settings, endpoints, cited tests) |
-
 ## Invariants: never break these
 
-These are spec §8 hard constraints and are covered by tests (`docs/guide/security.md` maps each one
-to its tests). If a change seems to require weakening one, stop and ask a human.
+These are the spec §8 hard constraints, each covered by tests (`docs/guide/security.md` maps
+every one to its tests). They override everything else in this file. If a task seems to need
+one weakened, stop and ask a human.
 
 1. **No code change without a recorded human approval.** Execution goes through
    `executor.service.assert_approved` (latest review is an approval by role `reviewer|admin`,
@@ -183,6 +64,169 @@ to its tests). If a change seems to require weakening one, stop and ask a human.
     to `in_review` with an `execution_report`, or a finding marked `suppressed` with a
     `status_reason`.
 
+## How to work
+
+Opsmith decides what code an AI agent may change on other people's repositories. Stability,
+security and correctness come before speed and before features. Every session, by a person or
+an agent, follows these rules from the first step to the last. Where they seem to conflict,
+the invariants win, then these rules, then the conventions below.
+
+### Start from a known state
+
+1. **Read before you touch.** Read this file, the docs for the area you will change (the
+   table above), and the ADR behind it.
+2. **Take a baseline.** Run `make check` before you change anything and note the result. If it
+   is not green, find out why before you add to it, and say so in your report.
+3. **Understand, then plan.** Find the code the change touches, its callers and its tests. For
+   a change across several modules, write the design down first (an ADR, or an entry in
+   `docs/DECISIONS.md`) and check it against the invariants before you write code.
+
+### Change the code with care
+
+4. **Do what was asked, completely, and nothing else.** Something else you find goes into its
+   own commit, or into your report; never fold it silently into the change.
+5. **Correct, simple and readable beats clever.** A reviewer must be able to see that it is
+   right. Follow the conventions below and the code around you.
+6. **Every change comes with tests:** the happy path, the failure path and, for anything that
+   guards safety, a negative test that shows the bad path is blocked.
+7. **A bug fix starts with a failing test.** Write the test that reproduces the bug, run it,
+   and see it fail for the reason you expect. Then fix the code and see it pass. The test
+   stays, as the regression test.
+8. **Secure by default.** Validate input at the edge and bound it to what stores it. Keep
+   untrusted data as data. Never add a secret, credential, real customer data or token to
+   code, tests, fixtures, logs or commits, and never add an unsafe pattern (`shell=True`,
+   `eval`, `pickle`, string-built SQL, unconfined paths, unbounded reads, calls without
+   timeouts).
+9. **Never hide a failure:** no bare `except` that swallows, no skipped test to get green, no
+   retry that masks a bug (invariant 10).
+10. **Verify before you act.** Read the code a page describes before you change either. Check
+    a claim from a reviewer, a tool or another agent against the code before you apply it;
+    they are often right and sometimes wrong. A number in the docs (tests, coverage, a
+    version) comes from a run you saw, not from memory.
+
+### Prove it before you call it done
+
+11. **Run the checks.** Iterate with targeted runs (`uv run pytest tests/test_<area>.py -q`),
+    then run `make check` once on the final tree. Also run `make site` when docs changed, the
+    suite on PostgreSQL when you touched models or queries, and `uv run pytest -m docker`
+    when you touched the sandbox, the executor or the external scanners
+    (`audits/external.py`) and Docker is available.
+12. **A green run counts only if you saw it.** A skipped test is not a pass: read the skip
+    reasons (`uv run pytest -q -rs`). Coverage and "all tests pass" come from a full run of
+    the current tree. Report failures with their output, never describe a red run as green,
+    and say what you did not run. Never weaken a test, a gate or a bound to make something
+    pass; if a test is wrong, fix it on its own and say why.
+13. **Never merge, and never ask for a merge, with a regression:** a test that passed before
+    must pass after, coverage must stay above the floor, and the build must be clean.
+
+### Leave the docs true, for every change
+
+14. **Update the Markdown docs** the change affects: the pages under `docs/`, the README, this
+    file, `CONTRIBUTING.md`. A behaviour the docs do not describe, or describe wrongly, is a
+    bug. The documentation site is built from the same pages: add a new page to `nav` in
+    `mkdocs.yml`, and run `make site` to prove it builds with no warning.
+15. **Update `CHANGELOG.md` in the same commit,** under *Unreleased* (Keep a Changelog: Added,
+    Changed, Fixed, Security, with *Upgrade notes* for anything an operator must do). The
+    site's changelog page is this file.
+16. **Record significant decisions in `docs/DECISIONS.md`,** with the reasoning and the options
+    not taken: a choice between workable designs, a tool, something left open on purpose.
+    Design decisions about the system itself also get an ADR in `ARCHITECTURE_DECISIONS.md`.
+
+### Ship it
+
+17. **Release every change that reaches `main`.** Whoever merged it releases it at once: move
+    the entries under `## <version> - <yyyy-mm-dd>` (a patch version for fixes, a minor one
+    for features), set that version in `pyproject.toml` and `src/opsmith/__init__.py`, run
+    `uv lock` so that `uv.lock` records it, tag `v<version>`, and publish a GitHub Release
+    whose notes are that changelog section. Do not let unreleased changes collect on `main`.
+18. **Before every push, look at what leaves.** Read `git diff origin/main` and the commit
+    messages. The docs, the README and the changelog must already describe the change. Scan
+    the outgoing commits for secrets (for example `gitleaks git
+    --log-opts="origin/main..HEAD"`) and for details of the machine or deployment you worked
+    on. Never print a token or key in a command's output, a log or a message.
+19. **After a push to `main`, check that it landed.** Whoever pushed checks that CI passed,
+    that the *Docs* workflow deployed GitHub Pages, and that the live site shows the new
+    version and changelog. A failed build or deploy is fixed before other work.
+
+### Keep the workspace safe, and know when to ask
+
+20. **Leave things as you found them.** Remove scratch files, containers and test databases
+    you started, and delete any credential you were handed once the task is done. Use only
+    credentials given for the task, never ones you find on the machine. On a shared or small
+    host, check free memory before a heavy run (the suite writes over 1 GB of temporary
+    files; point `--basetemp` at disk when `/tmp` is RAM-backed), and never run two full
+    suites at once.
+21. **Stop and ask** when a task seems to need an invariant changed, a destructive action on
+    shared state (a running deployment, another project's files, history on `main`), or a
+    decision only the maintainer can make: the license, the security policy, anything posted
+    publicly in their name.
+
+Every session ends with a short report: what changed, how it was verified (the commands and
+their results), what was not run, and anything left open.
+
+## Commands
+
+```bash
+uv sync --all-extras                 # install (Python 3.12+, uv 0.9+)
+make check                           # lint, format, mypy, tests + coverage floor, docs (CI's main job)
+make fmt                             # auto-fix lint and format (src, tests, scripts)
+make audit                           # known vulnerabilities in the locked dependencies (CI runs it)
+make site                            # build the documentation site, strict (make site-serve to preview)
+uv run pytest tests/test_<area>.py -q   # while iterating
+uv run pytest -q -rs                 # the whole suite (4-6 min), listing what was skipped and why
+uv run pytest tests/test_e2e.py      # spec §11 acceptance criteria, end to end
+uv run pytest -m docker              # tests that start real containers (skipped without Docker)
+uv run python scripts/check_docs.py  # docs: links, anchors, cited tests, undocumented features
+uv run mypy                          # strict-ish typing on src/
+uv run opsmith demo --dir /tmp/demo  # full offline loop: ingest -> ... -> PR -> verified
+make docker-test                     # the same checks inside the dev image (no local Python needed)
+```
+
+On a host where `/tmp` is RAM-backed or small, keep the suite's temporary files on disk:
+`PYTEST_ADDOPTS="--basetemp=/var/tmp/opsmith-pytest" make check`, then remove that directory.
+
+The whole suite also runs on PostgreSQL. Point `OPSMITH_TEST_DATABASE_URL` at a server whose
+user may create databases; each test then gets its own database:
+
+```bash
+docker run -d --rm --name pg -e POSTGRES_USER=opsmith -e POSTGRES_PASSWORD=opsmith -p 127.0.0.1:5432:5432 postgres:18.6-alpine3.24
+OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@localhost:5432/opsmith uv run pytest -q
+docker stop pg
+```
+
+## Repository map
+
+| Path (under `src/opsmith/` unless it starts at the root) | Responsibility |
+|---|---|
+| `platform.py` | Composition root and queue handler wiring. Start here. |
+| `models.py`, `schemas.py` | ORM entities (all tenant-scoped) / pydantic contracts incl. settings and LLM stage I/O |
+| `migrations/` | Alembic revisions of the schema, applied by every process at start (ADR-002) |
+| `queue.py`, `scheduler.py` | Durable idempotent jobs with leased, heartbeated claims; cron/interval schedules |
+| `audit_log.py` | Append-only audit trail, task/lead state machines, run immutability |
+| `db.py` | Engine and sessions; `utcnow`, `new_id` and the `SERIALIZE` row lock |
+| `security.py` | Tenants, users, the four roles and API keys (stored as SHA-256) |
+| `protection.py` | Protected paths: `elevated` needs an admin approval, `excluded` is never changed |
+| `notifications.py` | Notification outbox; delivery is a `notify` job |
+| `dashboard.py`, `provenance.py` | Dashboard figures and `FUNNEL`; a task's provenance chain |
+| `cli.py`, `demo.py`, `configfile.py` | The `opsmith` command, the offline demo, `opsmith apply` |
+| `config.py`, `localfs.py` | Process settings and credential references; confinement of host-file access |
+| `connectors/`, `etl/` | Signal sources; normalize → enrich → redact → store → bundle |
+| `redaction.py` | Secret/PII detectors shared by ETL, the gateway and the diff gate |
+| `llm/` | `LLMGateway` (the only path to a model for pipeline stages; the coding agents in `executor/agents.py` call their model directly, inside the confined workspace), prompts, pricing, providers |
+| `inference/orchestrator.py` | Chained runs, lead carry/confirm/refute/expire |
+| `audits/` | Analyzers (built-in + external tools), the audit runner, and checks (`checks.py`): admin-written instructions a model carries out on the code (ADR-019) |
+| `aggregation/` | Correlation, dedup/suppression, scoring, task drafting |
+| `review.py` | Human review gate and the approval scope digest |
+| `executor/` | Sandboxes, workspace confinement, coding agents, execution service, PR body |
+| `gitutil.py` | The only place git is invoked: safe config, trusted git dir, unambiguous parsing |
+| `scm/` | GitHub + local providers. **No merge operation, by design.** Repository addresses and branches are checked before git sees them (`scm.base.check_repository`) |
+| `tracking.py` | PR/CI tracking, post-merge verification |
+| `api/`, `ui/` | FastAPI JSON API (`/api/v1`) and server-rendered UI (`/ui`) |
+| `tests/` | Unit/integration tests; `conftest.py` seeds a tenant, users, project, git repo. `test_hardening.py` holds the adversarial tests, `test_runtime.py` the process loops |
+| `docs/`, root `*.md` | The documentation. `docs/guide/` for people running Opsmith, `docs/development/` for people changing it, `docs/DECISIONS.md` and `docs/SECURITY-AUDIT.md` for the record |
+| `mkdocs.yml`, `site/`, `scripts/build_site.py` | The documentation site: every Markdown page, published to GitHub Pages by `.github/workflows/docs.yml` |
+| `scripts/check_docs.py` | Fails the build when the docs and the code disagree (links, settings, endpoints, cited tests) |
+
 ## Conventions
 
 - Python 3.12, full type hints, `mypy` clean, `ruff` clean (line length 100). No relative
@@ -194,7 +238,7 @@ to its tests). If a change seems to require weakening one, stop and ask a human.
   as the state it depends on. Keys must be deterministic for the logical unit of work.
 - Handlers raise `queue.RetryLater` to wait (no attempt consumed) and `queue.PermanentFailure`
   when retrying cannot help.
-- Keep long-running work (clones, agents, checks) outside DB transactions. See
+- Keep long-running work (clones, agents, sandboxed commands) outside DB transactions. See
   `ExecutionService`.
 - Modules under `src/opsmith/api/` avoid `from __future__ import annotations` so FastAPI can
   resolve dependency annotations.
@@ -209,15 +253,41 @@ to its tests). If a change seems to require weakening one, stop and ask a human.
   stage settings (`input_price_per_mtok`, `output_price_per_mtok`).
 - Every stage that calls a model must record its usage in `UsageRecord`, including the coding
   agent, because that ledger is what the budgets read.
+- **Claude API code** (`llm/anthropic_provider.py`, `executor/agents.py`): call
+  `messages.create`, never `messages.parse`; set `output_config.format` with
+  `anthropic_provider.output_format(schema)` for structured stages, and always
+  `output_config.effort`. Pass `timeout=anthropic_provider.request_timeout(max_tokens)`. Use a
+  manual tool loop with strict tool schemas. Handle the `refusal` and `max_tokens` stop
+  reasons; a tool call cut off by `max_tokens` gets an error `tool_result` and is never run.
+  Count input with `anthropic_provider.input_tokens_of(usage)`, and append the full
+  `response.content` to the conversation. `CLAUDE.md` gives the reasons.
 - Invoke git only through `gitutil.run_git`. Parse its NUL-delimited output (`-z`), never the
   line-based formats: file names are attacker-controlled.
 - Validate at the edge. Project settings are range-checked in `schemas.ProjectSettings`; add a
   bound whenever you add a setting, because a bad value otherwise fails later inside a job.
+  Add the setting to `docs/guide/configuration.md` and to `opsmith.example.toml` too.
 - **A model change that alters the schema needs a migration** (ADR-002): a new revision in
   `src/opsmith/migrations/versions/`, written with `uv run alembic revision --autogenerate`
   (see `docs/development/architecture.md`). Never edit a released revision.
   `tests/test_migrations.py` fails when the models and the revisions disagree. Call the change
   out under *Upgrade notes* in `CHANGELOG.md`.
+
+## Testing
+
+- Tests must not touch the network. Use `httpx.MockTransport` for HTTP. For the Anthropic
+  SDK, run the real SDK over `httpx.MockTransport` (see `tests/test_llm.py` and
+  `tests/test_executor.py`); a hand-written fake accepts any arguments and hides mistakes.
+- Use the `platform`, `seed` and `drain` fixtures. `drain()` runs queued jobs to completion.
+  Fixtures use the `local` sandbox and set `local_root` to the test's temp dir.
+- Any behaviour change to the pipeline needs a test at the module level, and the spec §11
+  assertions in `tests/test_e2e.py` must keep passing.
+- Security-relevant code (gates, confinement, redaction, tenancy) needs a negative test that
+  proves the bad path is blocked. Put it in `tests/test_hardening.py` or next to its area, and
+  list it in `docs/guide/security.md`.
+- Tests that need a real Docker daemon carry `@pytest.mark.docker` and skip themselves when
+  Docker or the image is unavailable.
+- Code must work on SQLite and PostgreSQL. PostgreSQL enforces column lengths and types that
+  SQLite ignores; run the suite against it (see Commands) when you touch models or queries.
 
 ## Extending
 
@@ -237,35 +307,21 @@ short:
 - **Task state:** extend `TASK_TRANSITIONS`, the UI status chips, `dashboard.FUNNEL`, and add
   an ADR entry.
 
-## Testing
-
-- Tests must not touch the network. Use `httpx.MockTransport` for HTTP and fake clients for
-  the Anthropic SDK (see `tests/test_llm.py` and `tests/test_executor.py`).
-- Use the `platform`, `seed` and `drain` fixtures. `drain()` runs queued jobs to completion.
-  Fixtures use the `local` sandbox and set `local_root` to the test's temp dir.
-- Any behaviour change to the pipeline needs a test at the module level, and the spec §11
-  assertions in `tests/test_e2e.py` must keep passing.
-- Security-relevant code (gates, confinement, redaction, tenancy) needs a negative test that
-  proves the bad path is blocked. Put it in `tests/test_hardening.py` or next to its area, and
-  list it in `docs/guide/security.md`.
-- Tests that need a real Docker daemon carry `@pytest.mark.docker` and skip themselves when
-  Docker or the image is unavailable.
-- Code must work on SQLite and PostgreSQL. PostgreSQL enforces column lengths and types that
-  SQLite ignores; run the suite against it (see Commands) when you touch models or queries.
-
 ## Definition of done
 
 - [ ] `make check` passed before the change and passes after it (ruff, format, mypy, the
       suite with the coverage floor, the docs check), with no test newly failing or skipped.
 - [ ] New behaviour is covered by tests, including failure and negative paths; a bug fix has
       a test that failed before the fix.
-- [ ] Invariants above are untouched, or a human approved the change and an ADR records it.
+- [ ] The invariants are untouched, or a human approved the change and an ADR records it.
 - [ ] The Markdown docs match the code, and `make site` builds the documentation site.
 - [ ] `CHANGELOG.md` describes every user-visible change, in the commit that makes it; once on
       `main`, the change is released (tag and GitHub Release) and the live site shows it.
 - [ ] Significant decisions are in `docs/DECISIONS.md` (and design changes in
       `ARCHITECTURE_DECISIONS.md`), with the reasoning.
-- [ ] No secrets, tokens or real customer data in code, tests, fixtures, logs or commits.
+- [ ] No secrets, tokens or real customer data in code, tests, fixtures, logs or commits; the
+      outgoing commits were scanned before the push.
+- [ ] The session's report says what changed, how it was verified and what was not run.
 
 ## Commits and PRs
 
