@@ -74,6 +74,21 @@ docker compose exec api opsmith init --tenant acme --admin "Your Name"
 The API is published on `127.0.0.1:8000` only. To expose it, put a TLS-terminating reverse
 proxy in front and set `OPSMITH_BASE_URL` to the public URL.
 
+To serve Opsmith under one path of a domain that hosts other things (for example
+`https://example.org/opsmith/`), set `OPSMITH_BASE_PATH=/opsmith` and route that path to it
+without stripping the prefix. The API, the UI, its assets and the API reference then live
+under the path, and the sign-in cookie is scoped to it. With Caddy:
+
+```caddyfile
+redir /opsmith /opsmith/ 308
+handle /opsmith/* {
+	reverse_proxy opsmith:8000
+}
+```
+
+Put your own access control in front of the route if the domain's users should not all
+reach Opsmith's sign-in page (Caddy's `forward_auth`, for example).
+
 At this point Opsmith ingests, analyzes, audits, ranks and takes reviews. It will **not**
 execute an approved task yet: the worker has no sandbox. An approval in this state returns the
 task to the review queue with the reason `sandbox unavailable`. Giving it one is the
@@ -212,6 +227,7 @@ All are optional unless marked. [`.env.example`](../../.env.example) lists the s
 | `OPSMITH_ANTHROPIC_API_KEY_REF` | `env:ANTHROPIC_API_KEY` | Where the Claude API key comes from |
 | `OPSMITH_ANTHROPIC_FALLBACKS` | `default` | Server-side refusal fallbacks for Claude; `off` disables |
 | `OPSMITH_BASE_URL` | unset | Public URL of the UI; makes pull requests link to their task |
+| `OPSMITH_BASE_PATH` | unset | Serve the API and UI under this path (`/opsmith`) instead of the root, behind a proxy that routes that path here |
 | `OPSMITH_WORKER_LEASE_SECONDS` | `900` | How long after a worker dies its job is retried |
 | `OPSMITH_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, in either case. Anything else stops the process at start |
 | `OPSMITH_LOG_JSON` | `true` | JSON logs; `false` for plain text |

@@ -165,7 +165,7 @@ A connector is a source of signals. Each belongs to a project and usually to a s
 ```toml
 [[projects.connectors]]
 name = "loki"
-type = "loki"                         # loki | prometheus | file_logs | file_metrics | push_logs | push_metrics
+type = "loki"                         # loki | victorialogs | prometheus | file_logs | file_metrics | push_logs | push_metrics
 service = "payments-api"              # default service for records that do not name one
 service_environment = "production"    # which "payments-api", when it exists in several environments
 interval_seconds = 900                # at least 60; left out, the project's ingest_interval_seconds
@@ -235,6 +235,25 @@ Read files on the worker. For development, tests and simple setups. The path mus
 
 Metric files are JSON lines with `timestamp`, `name`, `value` and optionally `service` and
 `labels`. A record without a timestamp is skipped and counted.
+
+### `victorialogs`
+
+Reads [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) through its LogsQL query
+API (`/select/logsql/query`), read-only.
+
+| `config` key | Default | Meaning |
+|---|---|---|
+| `url` | required | Base URL of VictoriaLogs, for example `http://victorialogs:9428` |
+| `query` | `*` (everything) | A LogsQL filter, for example `app_name:(backend OR caddy)`. Opsmith adds the time window and the ordering itself |
+| `service_field` | `app_name` | The field that names the service. `app_name` is the syslog tag, which Docker's syslog driver sets to the container or compose service name |
+| `limit` | 5000 | Entries per page; up to 20 pages per run, the rest on the next run |
+| `environment` | the linked service's, else `production` | Environment for entries without an `environment` field |
+| `timeout`, `lag_seconds` | 30, 60 | As above |
+
+The level of each entry is, in order: the `level` of a JSON message; a level word such as
+`ERROR:`, `WARN`, `FATAL` or nginx's `[notice]` near the start of a text message; the entry's own `level` field.
+Docker's syslog driver marks everything a container writes to stderr as an error, so the
+level the message states is the more accurate one.
 
 ### `push_logs` and `push_metrics`
 

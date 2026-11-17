@@ -17,6 +17,7 @@ the real service is not.
 |---|---|---|---|
 | `loki` | Grafana Loki, `GET /loki/api/v1/query_range` | **Loki 2.9.17, 3.7.10** | Live, every push |
 | `prometheus` | Prometheus, `GET /api/v1/query_range` | **Prometheus v2.53.5, v3.5.5 (LTS), v3.16.0** | Live, every push |
+| `victorialogs` | VictoriaLogs, `GET /select/logsql/query` | **VictoriaLogs v1.53.0** | A scripted server in every push; run by hand against a real v1.53.0 server. Not live in CI yet |
 | `file_logs`, `file_metrics` | JSONL and plain-text files under `OPSMITH_LOCAL_ROOT` | Formats in [Configuration](configuration.md#connectors) | Unit tests on real files |
 | `push_logs`, `push_metrics` | Your collector, calling Opsmith's API | [API](api.md) | API tests |
 

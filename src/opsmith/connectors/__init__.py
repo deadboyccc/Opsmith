@@ -19,6 +19,7 @@ from opsmith.connectors.files import FileLogConnector, FileMetricConnector
 from opsmith.connectors.loki import LokiConnector
 from opsmith.connectors.prometheus import PrometheusConnector
 from opsmith.connectors.push import PushLogConnector, PushMetricConnector
+from opsmith.connectors.victorialogs import VictoriaLogsConnector
 
 __all__ = [
     "ConnectorError",
@@ -31,6 +32,7 @@ __all__ = [
     "PrometheusConnector",
     "PushLogConnector",
     "PushMetricConnector",
+    "VictoriaLogsConnector",
     "available_types",
     "build_connector",
     "register",

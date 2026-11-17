@@ -341,3 +341,21 @@ library.
   band. The first version put half its energy below 80 Hz, which phone speakers barely
   reproduce, so it would have sounded thin on a phone. The bass was moved up an octave and
   the kick given an overtone, putting the weight between 80 and 250 Hz.
+
+## Serving under a path, reading VictoriaLogs (1.4.0)
+
+### Under a path: mount the application, do not strip the prefix
+
+To serve Opsmith at `https://<domain>/opsmith/` next to other sites, the whole application is
+mounted under the base path. The proxy forwards requests unchanged, and every link, redirect
+and asset is built from the path the request arrived through. Stripping the prefix in the
+proxy instead would leave the pages' absolute links (`/ui/...`) pointing at the other sites
+on the domain. The sign-in cookie is scoped to the path, so it is never sent to them.
+
+### A VictoriaLogs connector instead of a forwarder
+
+Stacks that keep their logs in VictoriaLogs could not be read: it does not offer Loki's
+query API. A read-only connector reads it directly; the alternative, shipping a
+second copy of every log line to Opsmith's push endpoint, would duplicate storage and add a
+moving part. The connector takes the level a message states over the syslog severity,
+because Docker's syslog driver records everything written to stderr as an error.

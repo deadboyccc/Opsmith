@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -635,3 +636,137 @@ def test_a_connector_request_has_a_total_deadline(monkeypatch) -> None:
     with pytest.raises(ConnectorError, match="took longer than"):
         conn.fetch(START, END, {})
     assert clock["now"] <= 5 * base.TOTAL_TIMEOUT_FACTOR + 20
+
+
+# --------------------------------------------------------------------------- victorialogs (1.4.0)
+
+
+def _vl_line(at: str, msg: str, app: str = "backend", level: str = "info", **fields: str) -> str:
+    stream = f'{{app_name="{app}",hostname="h"}}'
+    return json.dumps(
+        {
+            "_time": at,
+            "_msg": msg,
+            "_stream": stream,
+            "app_name": app,
+            "hostname": "h",
+            "level": level,
+            **fields,
+        }
+    )
+
+
+class VictoriaLogs:
+    """Scripted ``/select/logsql/query``: answers each request with the next page of lines."""
+
+    def __init__(self, *pages: list[str], status: int = 200) -> None:
+        self.pages = list(pages)
+        self.queries: list[str] = []
+        self.status = status
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/select/logsql/query"
+        self.queries.append(request.url.params["query"])
+        body = "\n".join(self.pages.pop(0) if self.pages else []) + "\n"
+        return httpx.Response(self.status, content=body.encode())
+
+    def connector(self, **config: Any) -> Any:
+        return build_connector(
+            "victorialogs",
+            {"url": "http://victorialogs:9428", **config},
+            default_service="unknown",
+            http=httpx.Client(transport=httpx.MockTransport(self)),
+            resolver=fake_dns,
+        )
+
+
+def test_victorialogs_reads_a_window_in_time_order() -> None:
+    server = VictoriaLogs(
+        [
+            _vl_line("2026-03-01T00:00:01.123456789Z", "started"),
+            _vl_line(
+                "2026-03-01T00:00:02Z",
+                json.dumps({"level": "warn", "msg": "slow upstream", "duration": 2.5}),
+                app="caddy",
+                level="error",  # Docker's syslog driver: stderr is "error", whatever it says
+            ),
+            _vl_line(
+                "2026-03-01T00:00:03Z", "ERROR: duplicate key value", app="postgres", level="error"
+            ),
+            _vl_line(
+                "2026-03-01T00:00:04Z", "LOG:  checkpoint starting", app="postgres", level="error"
+            ),
+            _vl_line(
+                "2026-03-01T00:00:05Z",
+                "2026/03/01 00:00:05 [notice] 1#1: start worker processes",
+                app="site",
+                level="error",  # nginx writes its own log to stderr
+            ),
+            _vl_line("2026-03-01T00:00:06Z", "plain text on stderr", app="site", level="error"),
+        ]
+    )
+    result = server.connector(query="app_name:(backend OR caddy OR postgres OR site)").fetch(
+        START, END, {}
+    )
+    query = server.queries[0]
+    assert query.startswith(
+        "_time:[2026-03-01T00:00:00.000000000Z, 2026-03-01T01:00:00.000000000Z)"
+    )
+    assert "(app_name:(backend OR caddy OR postgres OR site))" in query
+    assert query.endswith("| sort by (_time) | limit 5000")
+    got = [(e.service, e.severity, e.message) for e in result.logs]
+    assert got == [
+        ("backend", "info", "started"),
+        ("caddy", "warn", "slow upstream"),
+        ("postgres", "ERROR", "ERROR: duplicate key value"),
+        ("postgres", "LOG", "LOG:  checkpoint starting"),
+        ("site", "notice", "2026/03/01 00:00:05 [notice] 1#1: start worker processes"),
+        ("site", "error", "plain text on stderr"),
+    ]
+    first = result.logs[0]
+    assert first.timestamp == datetime(2026, 3, 1, 0, 0, 1, 123456, tzinfo=UTC)
+    assert first.attributes["hostname"] == "h"
+    assert "_stream" not in first.attributes
+    assert result.logs[1].attributes["duration"] == 2.5
+    assert result.cursor == {"last_end": END.isoformat()}
+
+
+def test_victorialogs_pages_through_a_busy_window_without_duplicates() -> None:
+    page1 = [_vl_line("2026-03-01T00:00:01Z", "a"), _vl_line("2026-03-01T00:00:02Z", "b")]
+    # Each page starts at the last timestamp read, so its last entry comes again: skipped.
+    page2 = [_vl_line("2026-03-01T00:00:02Z", "b"), _vl_line("2026-03-01T00:00:03Z", "c")]
+    page3 = [_vl_line("2026-03-01T00:00:03Z", "c"), _vl_line("2026-03-01T00:00:09Z", "d")]
+    page4 = [_vl_line("2026-03-01T00:00:09Z", "d")]
+    server = VictoriaLogs(page1, page2, page3, page4)
+    result = server.connector(limit=2).fetch(START, END, {})
+    assert [e.message for e in result.logs] == ["a", "b", "c", "d"]
+    assert server.queries[1].startswith("_time:[2026-03-01T00:00:02.000000000Z,")
+    assert result.cursor == {"last_end": END.isoformat()}
+
+
+def test_victorialogs_skips_lines_it_cannot_read_and_counts_them() -> None:
+    server = VictoriaLogs(
+        [
+            "not json",
+            json.dumps({"_msg": "no time"}),
+            json.dumps(["a list"]),
+            _vl_line("yesterday", "bad time"),
+            _vl_line("2026-03-01T00:00:01Z", "fine"),
+        ]
+    )
+    result = server.connector().fetch(START, END, {})
+    assert [e.message for e in result.logs] == ["fine"]
+    assert result.skipped == 4
+    assert "(*)" in server.queries[0]  # no query configured: everything in the window
+
+
+def test_victorialogs_failures_are_reported_without_the_body() -> None:
+    server = VictoriaLogs(["secret detail in the error body"], status=400)
+    with pytest.raises(ConnectorError, match="victorialogs returned HTTP 400") as raised:
+        server.connector().fetch(START, END, {})
+    assert "secret" not in str(raised.value)
+    with pytest.raises(ConnectorError, match="'limit'"):
+        VictoriaLogs().connector(limit=0).fetch(START, END, {})
+    full = [_vl_line("2026-03-01T00:00:01Z", f"m{i}") for i in range(2)]
+    with pytest.raises(ConnectorError, match="share one timestamp"):
+        VictoriaLogs(full, full).connector(limit=2).fetch(START, END, {})

@@ -6,6 +6,16 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Added
+
+- **A VictoriaLogs connector** (`victorialogs`), read-only, through the LogsQL query API. It
+  reads each window oldest first, page by page, and takes an entry's level from the message
+  itself when it states one, because Docker's syslog driver calls all of stderr an error.
+  See [Configuration](docs/guide/configuration.md#victorialogs).
+- **`OPSMITH_BASE_PATH`**: serve the API and UI under a path of a shared domain (for example
+  `/opsmith`) behind a reverse proxy. Links, redirects and assets follow the path, and the
+  sign-in cookie is scoped to it. See [Deployment](docs/guide/deployment.md).
+
 ## 1.3.3 - 2026-11-17
 
 ### Added

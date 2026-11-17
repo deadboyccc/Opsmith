@@ -208,7 +208,22 @@ class BaseConnector(ABC):
         return validate_base_url(self.config.get("url"), self._resolver)
 
     def get_json(self, url: str, params: Mapping[str, str]) -> dict[str, Any]:
-        """GET a JSON object with a hard size cap.
+        """GET a JSON object with a hard size cap (see ``get_body``)."""
+        try:
+            body = json.loads(self.get_body(url, params))
+        except ValueError:
+            raise ConnectorError(f"{self.type_name} response is not valid JSON") from None
+        if not isinstance(body, dict):
+            raise ConnectorError(f"{self.type_name} response is not a JSON object")
+        return body
+
+    def get_lines(self, url: str, params: Mapping[str, str]) -> list[str]:
+        """GET a response of one record per line (JSON Lines), as its non-empty lines."""
+        text = self.get_body(url, params).decode("utf-8", errors="replace")
+        return [line for line in text.splitlines() if line.strip()]
+
+    def get_body(self, url: str, params: Mapping[str, str]) -> bytes:
+        """GET a response body with a hard size cap and a total deadline.
 
         Errors carry the status code or the kind of failure only, never the response body:
         the text ends up in job errors a tenant can read.
@@ -236,13 +251,7 @@ class BaseConnector(ABC):
                     chunks.append(chunk)
         except httpx.HTTPError as exc:
             raise ConnectorError(f"{self.type_name} request failed: {type(exc).__name__}") from exc
-        try:
-            body = json.loads(b"".join(chunks))
-        except ValueError:
-            raise ConnectorError(f"{self.type_name} response is not valid JSON") from None
-        if not isinstance(body, dict):
-            raise ConnectorError(f"{self.type_name} response is not a JSON object")
-        return body
+        return b"".join(chunks)
 
     @abstractmethod
     def fetch(self, start: datetime, end: datetime, cursor: dict[str, Any]) -> FetchResult:
