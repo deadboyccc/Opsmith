@@ -15,6 +15,7 @@ import logging
 import math
 import re
 import socket
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_TIMEOUT_SECONDS = 120.0
+TOTAL_TIMEOUT_FACTOR = 4  # one request may take four read timeouts in all (2 to 8 minutes)
 
 # Maps a host name to the addresses it resolves to. Injectable so tests never touch DNS.
 Resolver = Callable[[str], Iterable[str]]
@@ -213,11 +215,19 @@ class BaseConnector(ABC):
         """
         chunks: list[bytes] = []
         size = 0
+        # ``timeout`` bounds each read. The whole request gets a deadline too, or a server
+        # that keeps sending a byte now and then holds the worker for as long as it likes.
+        allowed = self.timeout * TOTAL_TIMEOUT_FACTOR
+        started = time.monotonic()
         try:
             with self.http.stream("GET", url, params=dict(params)) as resp:
                 if not resp.is_success:
                     raise ConnectorError(f"{self.type_name} returned HTTP {resp.status_code}")
                 for chunk in resp.iter_bytes():
+                    if time.monotonic() - started > allowed:
+                        raise ConnectorError(
+                            f"{self.type_name} response took longer than {allowed:g} seconds"
+                        )
                     size += len(chunk)
                     if size > MAX_RESPONSE_BYTES:
                         raise ConnectorError(

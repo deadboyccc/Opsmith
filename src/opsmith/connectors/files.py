@@ -25,7 +25,7 @@ from opsmith.connectors.base import (
     MetricConnector,
     register,
 )
-from opsmith.localfs import confine
+from opsmith.localfs import LocalAccessError, confine
 from opsmith.schemas import LogEvent, MetricPoint
 
 DEFAULT_TEXT_PATTERN = (
@@ -86,6 +86,10 @@ def confined_files(pattern: Any, root: Path | None, deny: tuple[Path, ...]) -> l
     """
     if not isinstance(pattern, str) or not pattern:
         raise ConnectorError("file connector config needs a 'path'")
+    if ".." in pattern.replace(os.sep, "/").split("/"):
+        # Only the part before the first wildcard is confined below. A ".." after a wildcard
+        # would be expanded by the glob before any check, outside the root.
+        raise LocalAccessError("file connector: 'path' must not contain '..'")
     # The fixed part of the pattern is checked first, so a pattern aimed outside the root is
     # refused (and never walked) even when it matches nothing.
     magic = _GLOB_MAGIC.search(pattern)
@@ -93,11 +97,20 @@ def confined_files(pattern: Any, root: Path | None, deny: tuple[Path, ...]) -> l
     if magic and not fixed.endswith(os.sep):
         fixed = os.path.dirname(fixed)
     confine(fixed or ".", root, what="file connector", deny=deny)
-    return [
-        confine(match, root, what="file connector", deny=deny)
-        for match in sorted(glob.glob(pattern, recursive=True))
-        if Path(match).is_file()
-    ]
+    files: list[Path] = []
+    for match in sorted(glob.glob(pattern, recursive=True)):
+        if not Path(match).is_file():
+            continue
+        try:
+            files.append(confine(match, root, what="file connector", deny=deny))
+        except LocalAccessError:
+            # Named by the configured pattern, never by what it matched: the text reaches
+            # the job's error, and a match can be a file name the tenant should not learn.
+            raise LocalAccessError(
+                "file connector: 'path' matches a file outside OPSMITH_LOCAL_ROOT or inside "
+                "the platform data directory"
+            ) from None
+    return files
 
 
 @register("file_logs")

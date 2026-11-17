@@ -608,3 +608,30 @@ def test_a_plugin_connector_gets_its_entry_point_name(monkeypatch) -> None:
     monkeypatch.setitem(base._REGISTRY, "acme_logs", Plugin)
     monkeypatch.delitem(base._REGISTRY, "acme_logs")
     assert build_connector("acme_logs", {}).type_name == "acme_logs"
+
+
+def test_a_connector_request_has_a_total_deadline(monkeypatch) -> None:
+    """``timeout`` bounds each read, not the request. A server that sends one byte just often
+    enough kept a fetch, and the worker running it, busy for as long as it liked."""
+    from opsmith.connectors import base  # noqa: PLC0415
+
+    clock = {"now": 0.0}
+
+    def drip() -> Any:
+        for _ in range(1_000):
+            clock["now"] += 10.0  # ten seconds pass between any two chunks
+            yield b" "
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=drip())
+
+    monkeypatch.setattr(base.time, "monotonic", lambda: clock["now"])
+    conn = build_connector(
+        "prometheus",
+        {"url": "http://prom:9090", "queries": [{"name": "q", "promql": "up"}], "timeout": 5},
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=fake_dns,
+    )
+    with pytest.raises(ConnectorError, match="took longer than"):
+        conn.fetch(START, END, {})
+    assert clock["now"] <= 5 * base.TOTAL_TIMEOUT_FACTOR + 20
