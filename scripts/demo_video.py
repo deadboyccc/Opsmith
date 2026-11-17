@@ -12,10 +12,19 @@ Everything shown is synthetic: the demo generates its own repository, logs and m
 
 Writes ``docs/images/demo.mp4`` (H.264) and ``docs/images/demo.gif`` (a short, small preview
 for the README).
+
+**Narration.** Each beat has a spoken line (``NARRATION`` below, one per caption). When the
+recordings exist in ``docs/images/narration/<key>.mp3``, every beat is held until its line has
+been spoken, the moment each line starts is noted, and the lines are mixed into the MP4 at
+those moments, with the loudness normalized for speech. Without them the video is recorded
+silent, as before. The recordings were made with ElevenLabs (voice "Tommy", model
+``eleven_v4``); to change a line, replace its text here and its recording there, and record
+the video again. The GIF is always silent.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import socket
 import subprocess
@@ -41,6 +50,54 @@ from opsmith.review import ReviewService
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs" / "images"
+NARRATION_DIR = OUT / "narration"
+# What the narrator says on each beat. The captions on screen say the same thing in fewer
+# words, so the video still works with the sound off.
+NARRATION: dict[str, str] = {
+    "intro": "Here's Opsmith, start to finish, in about a minute.",
+    "login": (
+        "This is the offline demo. Everything you're about to see is synthetic: a generated"
+        " repository, made-up logs, and made-up metrics."
+    ),
+    "ranked": (
+        "Opsmith has already pulled in the logs and metrics, run its analysis, audited the"
+        " code, and ranked everything it found as tasks."
+    ),
+    "queue": (
+        "And here's the part that matters most. Nothing touches your code until a person"
+        " approves it."
+    ),
+    "task": (
+        "Each task ties what production saw to a specific line of code: the problem, the fix"
+        " it proposes, and how we'll know it worked."
+    ),
+    "provenance": (
+        "Scroll down, and you can trace it all the way back, from the raw log lines to the"
+        " finding in the code."
+    ),
+    "approve": (
+        "Our reviewer reads it, leaves a quick note, and approves. That approval covers"
+        " exactly what they saw, and nothing more."
+    ),
+    "execute": (
+        "Now a sandboxed agent writes the fix, runs the tests, and opens a pull request."
+        " Merging it, though, is always up to a human. Opsmith can't merge."
+    ),
+    "verified": (
+        "After the merge, fresh telemetry comes in, and the errors are gone. So the task is"
+        " marked verified."
+    ),
+    "record": (
+        "And every step is on the record: the run, the review, the findings, and the"
+        " analysis behind them."
+    ),
+    "executions": "Executions, checks, and pull requests, all in one place.",
+    "cta": (
+        "Want to try it yourself? Just run the demo. It's free, it runs offline, and it takes"
+        " about a minute."
+    ),
+}
+PAUSE_AFTER_LINE = 0.45  # seconds of silence after a line before the next beat
 BANNER = ROOT / "docs" / "images" / "brand" / "social-preview.html"
 SIZE = {"width": 1280, "height": 720}
 
@@ -115,9 +172,54 @@ class HeldDemo:
             ReviewService.review = review  # type: ignore[method-assign]
 
 
-def caption(page: Page, text: str, hold: float) -> None:
+class Narrator:
+    """Knows how long each recorded line is, and notes when each one starts in the video."""
+
+    def __init__(self) -> None:
+        self.ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        self.lengths: dict[str, float] = {}
+        for key in NARRATION:
+            path = NARRATION_DIR / f"{key}.mp3"
+            if path.is_file():
+                self.lengths[key] = self._length(path)
+        self.enabled = len(self.lengths) == len(NARRATION)
+        self.started = 0.0
+        self.cues: list[tuple[str, float]] = []
+
+    def _length(self, path: Path) -> float:
+        probe = subprocess.run(
+            [self.ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        found = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe.stderr)
+        if found is None:
+            raise RuntimeError(f"cannot read the length of {path}")
+        hours, minutes, seconds = found.groups()
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+    def start(self) -> None:
+        """The video starts when its page is created: line start times count from here."""
+        self.started = time.monotonic()
+
+    def hold(self, key: str | None, seconds: float, overlap: float = 0.0) -> float:
+        """How long a beat stays on screen: its own time, or long enough for its line.
+        ``overlap`` is how much of what follows (typing, a click) may run under the line."""
+        if not self.enabled or key is None:
+            return seconds
+        self.cues.append((key, time.monotonic() - self.started))
+        return max(seconds, self.lengths[key] + PAUSE_AFTER_LINE - overlap)
+
+
+NARRATOR = Narrator()
+
+
+def caption(
+    page: Page, text: str, hold: float, say: str | None = None, overlap: float = 0.0
+) -> None:
     page.evaluate(CAPTION_JS, text)
-    page.wait_for_timeout(int(hold * 1000))
+    page.wait_for_timeout(int(NARRATOR.hold(say, hold, overlap) * 1000))
 
 
 def scroll(page: Page, to: int, seconds: float) -> None:
@@ -137,13 +239,19 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
             viewport=SIZE, record_video_dir=str(video_dir), record_video_size=SIZE
         )
         page = context.new_page()
+        NARRATOR.start()
 
         page.goto(BANNER.as_uri())
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(3500)
+        page.wait_for_timeout(int(NARRATOR.hold("intro", 3.5) * 1000))
 
         page.goto(f"{root}/ui/login")
-        caption(page, "The offline demo: a generated repository, synthetic logs and metrics.", 2.5)
+        caption(
+            page,
+            "The offline demo: a generated repository, synthetic logs and metrics.",
+            2.5,
+            say="login",
+        )
         page.click("input[name=api_key]")
         page.keyboard.type(held.keys["reviewer"], delay=8)
         page.click("button[type=submit]")
@@ -153,10 +261,11 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
             "Opsmith ingested logs and metrics, ran chained analysis and a code audit,"
             " and ranked what it found as tasks.",
             4.5,
+            say="ranked",
         )
 
         page.goto(f"{root}/ui/review")
-        caption(page, "Nothing changes code until a human approves.", 3.5)
+        caption(page, "Nothing changes code until a human approves.", 3.5, say="queue")
 
         page.goto(f"{root}/ui/tasks/{held.task_id}")
         caption(
@@ -164,12 +273,24 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
             "Each task ties production evidence to the code: problem, approach, acceptance"
             " criteria.",
             4,
+            say="task",
         )
         scroll(page, 1200, 3.5)
-        caption(page, "Provenance: from raw log lines and metrics to the finding in the code.", 3)
+        caption(
+            page,
+            "Provenance: from raw log lines and metrics to the finding in the code.",
+            3,
+            say="provenance",
+        )
         form = page.locator("form[action$='/review']")
         scroll(page, int(form.evaluate("el => el.getBoundingClientRect().top + scrollY - 140")), 2)
-        caption(page, "A reviewer approves. The approval covers exactly what they saw.", 1.5)
+        caption(
+            page,
+            "A reviewer approves. The approval covers exactly what they saw.",
+            1.5,
+            say="approve",
+            overlap=2.5,  # the note is typed while the line is spoken
+        )
         form.locator("textarea[name=comment]").click()
         page.keyboard.type("Runtime timeouts match the audit finding. Ship it.", delay=30)
         page.wait_for_timeout(600)
@@ -181,6 +302,7 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
             "A sandboxed agent implements the fix, runs the tests and opens a pull request."
             " A human merges it: Opsmith cannot merge.",
             5,
+            say="execute",
         )
         held.thread.join(timeout=300)
         if held.error is not None or held.result is None:
@@ -190,16 +312,26 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
 
         page.goto(f"{root}/ui/tasks/{held.task_id}")
         scroll(page, 0, 0.1)
-        caption(page, "After the merge, fresh telemetry confirms the problem is gone: verified.", 4)
+        caption(
+            page,
+            "After the merge, fresh telemetry confirms the problem is gone: verified.",
+            4,
+            say="verified",
+        )
         scroll(page, 900, 3)
-        caption(page, "Every step is recorded: execution, review, findings, analysis runs.", 3.5)
+        caption(
+            page,
+            "Every step is recorded: execution, review, findings, analysis runs.",
+            3.5,
+            say="record",
+        )
 
         page.goto(f"{root}/ui/executions")
-        caption(page, "Executions, checks and pull requests at a glance.", 3)
+        caption(page, "Executions, checks and pull requests at a glance.", 3, say="executions")
 
         page.goto(BANNER.as_uri())
         page.wait_for_load_state("networkidle")
-        caption(page, "Try it yourself:  uv run opsmith demo", 4)
+        caption(page, "Try it yourself:  uv run opsmith demo", 4, say="cta")
 
         video = page.video
         context.close()
@@ -208,11 +340,30 @@ def record(held: HeldDemo, platform: Platform, root: str, video_dir: Path) -> Pa
         return Path(video.path())
 
 
+def narration_args() -> list[str]:
+    """ffmpeg inputs and filter for the narration: each line delayed to the moment its beat
+    started, all mixed, then normalized to the loudness usual for spoken video (-16 LUFS)."""
+    inputs: list[str] = []
+    filters: list[str] = []
+    for index, (key, start) in enumerate(NARRATOR.cues, start=1):
+        inputs += ["-i", str(NARRATION_DIR / f"{key}.mp3")]
+        delay = max(int(start * 1000) + 150, 0)  # the caption is drawn just before the line
+        filters.append(f"[{index}:a]adelay={delay}|{delay}[a{index}]")
+    mixed = "".join(f"[a{i}]" for i in range(1, len(NARRATOR.cues) + 1))
+    filters.append(
+        f"{mixed}amix=inputs={len(NARRATOR.cues)}:normalize=0,"
+        "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[voice]"
+    )
+    return [*inputs, "-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[voice]",
+            "-c:a", "aac", "-b:a", "128k"]  # fmt: skip
+
+
 def encode(webm: Path) -> None:
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     mp4, gif = OUT / "demo.mp4", OUT / "demo.gif"
+    audio = narration_args() if NARRATOR.enabled else []
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-i", str(webm), "-c:v", "libx264",
+        [ffmpeg, "-y", "-loglevel", "error", "-i", str(webm), *audio, "-c:v", "libx264",
          "-preset", "slow", "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
          str(mp4)],
         check=True,
@@ -257,6 +408,11 @@ def main() -> int:
         time.sleep(0.05)
 
     video_dir = base / "video"
+    if NARRATOR.enabled:
+        print(f"narrated: {len(NARRATOR.lengths)} lines from {NARRATION_DIR.relative_to(ROOT)}")
+    else:
+        missing = ", ".join(sorted(set(NARRATION) - set(NARRATOR.lengths)))
+        print(f"recording silent: no narration for {missing}")
     try:
         webm = record(held, platform, f"http://127.0.0.1:{port}", video_dir)
         if held.result is None or held.result.final_status != "verified":
