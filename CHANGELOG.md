@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.5.2 - 2026-11-17
+
 ### Fixed
 
 - **Under `OPSMITH_BASE_PATH`, the Compose stack did not start.** `/healthz` moved under the
