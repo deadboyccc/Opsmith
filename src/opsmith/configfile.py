@@ -75,6 +75,13 @@ def _pick(data: dict[str, Any], allowed: set[str], what: str) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k in allowed}
 
 
+def _known(data: dict[str, Any], allowed: set[str], what: str) -> None:
+    """A misspelt table (``[projects.setings]``) would otherwise be ignored without a word."""
+    extra = set(data) - allowed
+    if extra:
+        raise ConfigError(f"{what}: unknown keys {sorted(extra)}")
+
+
 def _name(data: Any, what: str) -> str:
     name = data.get("name") if isinstance(data, dict) else None
     if not isinstance(name, str) or not name.strip() or len(name) > 200:
@@ -143,9 +150,13 @@ def _validate_service(data: dict[str, Any], what: str) -> None:
 def apply_config(session: Session, tenant: Tenant, data: dict[str, Any]) -> list[Project]:
     """Upsert every project in ``data``. Raises ``ConfigError`` (or pydantic's
     ``ValidationError`` for ``settings``) before anything invalid is written."""
+    _known(data, {"tenant", "projects"}, "configuration")
     projects: list[Project] = []
     for pdata in data.get("projects", []):
         name = _name(pdata, "project")
+        _known(
+            pdata, {"name", "settings", "repositories", "services", "connectors"}, f"project {name}"
+        )
         settings = ProjectSettings.model_validate(pdata.get("settings", {}))
         project = session.scalar(
             select(Project).where(Project.tenant_id == tenant.id, Project.name == name)

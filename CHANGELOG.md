@@ -15,6 +15,14 @@ the database schema says so under *Upgrade notes*.
   job waited 48 hours and then failed as a dead job. It is now judged by the next run of the
   same check. A later check run also no longer counts as re-auditing a task found by the
   analyzers, which could have marked such a task `verified` without anything checking it.
+- **`opsmith apply` ignored misspelt tables and top-level keys** (`[projects.setings]`,
+  `[[projects.service]]`), so what they held silently did not exist. Unknown keys are now
+  errors at every level, as the docs said.
+
+### Upgrade notes
+
+- `opsmith apply` now refuses a file with an unknown top-level or project key. If an apply
+  fails after the upgrade, the message names the key: it was being ignored before.
 
 ## 1.5.1 - 2026-11-17
 

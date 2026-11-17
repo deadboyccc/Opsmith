@@ -105,6 +105,32 @@ def test_apply_rejects_bad_config_without_writing_anything(
         assert s.scalars(select(Project)).all() == []  # every failed apply rolled back
 
 
+def test_apply_refuses_misspelt_tables_and_keys(env: Path, tmp_path: Path, capsys) -> None:
+    """A misspelt table (``[projects.setings]``, ``[[projects.service]]``) was applied without a
+    word, so the settings or services it held silently did not exist."""
+    main(["init", "--tenant", "acme"])
+    cfg = tmp_path / "typo.toml"
+    cases = {
+        "configuration: unknown keys ['tenat']": 'tenat = "acme"\n[[projects]]\nname = "p"\n',
+        "configuration: unknown keys ['project']": '[[project]]\nname = "p"\n',
+        "project p: unknown keys ['setings']": (
+            '[[projects]]\nname = "p"\n[projects.setings]\naudit_cron = "0 1 * * *"\n'
+        ),
+        "project p: unknown keys ['service']": (
+            '[[projects]]\nname = "p"\n[[projects.service]]\nname = "s"\n'
+        ),
+    }
+    for expected, body in cases.items():
+        cfg.write_text(body)
+        assert main(["apply", str(cfg), "--tenant", "acme"]) == 1, expected
+        assert expected in capsys.readouterr().err
+    cfg.write_text('tenant = "acme"\n[[projects]]\nname = "p"\n')  # both known: accepted
+    assert main(["apply", str(cfg)]) == 0
+    platform = Platform(Settings(data_dir=env, log_json=False))
+    with platform.db.session() as s:
+        assert [p.name for p in s.scalars(select(Project))] == ["p"]
+
+
 def test_invalid_process_settings_exit_cleanly(env: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPSMITH_SANDBOX_BACKEND", "chroot")
     with pytest.raises(SystemExit, match="OPSMITH_"):
