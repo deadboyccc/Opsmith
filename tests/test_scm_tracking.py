@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -17,17 +18,17 @@ from tests.test_executor import EditingAgent, _use_agent, approve, make_task
 
 
 def gh_repo(**kw) -> Repository:
-    return Repository(
-        id="repo_1",
-        tenant_id="t",
-        project_id="p",
-        name="api",
-        scm_provider="github",
-        url="https://github.com/acme/api.git",
-        credentials_ref="env:GH_TEST_TOKEN",
-        default_branch="main",
-        **kw,
-    )
+    fields = {
+        "id": "repo_1",
+        "tenant_id": "t",
+        "project_id": "p",
+        "name": "api",
+        "scm_provider": "github",
+        "url": "https://github.com/acme/api.git",
+        "credentials_ref": "env:GH_TEST_TOKEN",
+        "default_branch": "main",
+    }
+    return Repository(**{**fields, **kw})
 
 
 @pytest.fixture
@@ -240,3 +241,137 @@ def test_github_ci_reads_every_page_of_check_runs(gh_token, late, expected) -> N
     scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(handler)))
     assert scm.get_pull_request(gh_repo(), 7).ci == expected
     assert pages == [1, 2]
+
+
+# --------------------------------------------------------------------------- github provider
+
+
+def test_github_checkout_clones_then_fetches_over_https_only(
+    gh_token, tmp_path, monkeypatch
+) -> None:
+    """What the provider asks git to do, recorded instead of run (tests stay offline): the
+    token goes in a transient header, options end before the address, and git may use https
+    and nothing else, for the address and for anything it redirects to."""
+    from opsmith.scm import github  # noqa: PLC0415
+
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    monkeypatch.setattr(github, "run_git", lambda args, *a, **kw: calls.append((args, kw)) or "")
+    scm = GitHubSCM()
+    dest = tmp_path / "checkout"
+    assert scm.checkout(gh_repo(), dest) == dest
+    clone, options = calls[0]
+    assert clone == [
+        "clone", "--depth", "200", "--branch", "main", "--",
+        "https://github.com/acme/api.git", str(dest),
+    ]  # fmt: skip
+    assert (options["token"], options["protocols"]) == (gh_token, ("https",))
+    (dest / ".git").mkdir(parents=True)
+    calls.clear()
+    scm.checkout(gh_repo(), dest)
+    assert [args[0] for args, _ in calls] == ["fetch", "reset", "clean"]
+    fetch, options = calls[0]
+    assert fetch[-3:] == ["--", "https://github.com/acme/api.git", "refs/heads/main"]
+    assert options["protocols"] == ("https",)
+
+
+def test_github_push_goes_only_to_the_opsmith_branch(gh_token, tmp_path, monkeypatch) -> None:
+    from opsmith.scm import github  # noqa: PLC0415
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(github, "run_git", lambda args, *a, **kw: calls.append(args) or "")
+    GitHubSCM().push_branch(gh_repo(), tmp_path, "opsmith/fix/x")
+    assert calls == [
+        [
+            "push",
+            "--force",
+            "--",
+            "https://github.com/acme/api.git",
+            "HEAD:refs/heads/opsmith/fix/x",
+        ]
+    ]
+
+
+def test_github_token_problems_are_reported(monkeypatch) -> None:
+    monkeypatch.delenv("GH_TEST_TOKEN", raising=False)
+    with pytest.raises(SCMError, match="no token resolvable"):
+        GitHubSCM()._token(gh_repo())
+    with pytest.raises(SCMError, match="reserved for the platform"):
+        GitHubSCM()._token(gh_repo(credentials_ref="env:OPSMITH_DATABASE_URL"))
+
+
+def test_github_owner_and_name_come_from_the_url_when_not_given(gh_token) -> None:
+    assert GitHubSCM._full_name(gh_repo()) == "acme/api"
+    assert GitHubSCM._full_name(gh_repo(full_name="other/name")) == "other/name"
+    with pytest.raises(SCMError, match="cannot derive owner/repo"):
+        GitHubSCM._full_name(gh_repo(url="https://github.example.com/acme/team/api.git"))
+
+
+def test_github_api_failures_surface_as_scm_errors(gh_token) -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(down)))
+    with pytest.raises(SCMError, match="GitHub API GET"):
+        scm.get_pull_request(gh_repo(), 7)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(422, json={"message": "Validation Failed: head is invalid"})
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(refuse)))
+    with pytest.raises(SCMError, match=r"create PR failed \(422\)"):
+        scm.create_pull_request(gh_repo(), branch="opsmith/fix/x", title="t", body="b")
+    with pytest.raises(SCMError, match=r"get PR failed \(404\)"):
+        scm.get_pull_request(gh_repo(), 7)
+
+
+def test_an_existing_pull_request_that_cannot_be_found_is_an_error(gh_token) -> None:
+    """GitHub says the pull request already exists, then does not list it (it was closed in
+    between): that is a failed creation, not a success with no pull request."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(422, json={"message": "A pull request already exists"})
+        return httpx.Response(200, json=[])
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(SCMError, match="create PR failed"):
+        scm.create_pull_request(gh_repo(), branch="opsmith/fix/x", title="t", body="b")
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ({"total_count": 1, "state": "success"}, "success"),
+        ({"total_count": 2, "state": "failure"}, "failure"),
+        ({"total_count": 1, "state": "error"}, "failure"),
+        ({"total_count": 1, "state": "pending"}, "pending"),
+        ({"total_count": 0, "state": "pending"}, "none"),
+    ],
+)
+def test_github_ci_falls_back_to_commit_statuses(gh_token, status, expected) -> None:
+    """A repository whose CI reports commit statuses (not check runs)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls/7"):
+            return httpx.Response(200, json={"state": "open", "head": {"sha": "abc"}})
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
+        return httpx.Response(200, json=status)
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert scm.get_pull_request(gh_repo(), 7).ci == expected
+
+
+def test_a_pull_request_without_a_head_commit_has_no_ci(gh_token) -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"state": "closed", "merged": False})
+
+    scm = GitHubSCM(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    status = scm.get_pull_request(gh_repo(), 7)
+    assert (status.state, status.ci, status.head_sha) == ("closed", "none", None)
+    assert calls == ["/repos/acme/api/pulls/7"]
