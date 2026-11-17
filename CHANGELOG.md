@@ -11,6 +11,10 @@ the database schema says so under *Upgrade notes*.
 - **Under `OPSMITH_BASE_PATH`, the Compose stack did not start.** `/healthz` moved under the
   path, so the image's health check failed, and the worker and scheduler, which wait for a
   healthy API, never started. `/healthz` and `/metrics` are now also served at the root.
+- **A task found only by a check could never be verified.** After its merge the verification
+  job waited 48 hours and then failed as a dead job. It is now judged by the next run of the
+  same check. A later check run also no longer counts as re-auditing a task found by the
+  analyzers, which could have marked such a task `verified` without anything checking it.
 
 ## 1.5.1 - 2026-11-17
 

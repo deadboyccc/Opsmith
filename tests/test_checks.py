@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from opsmith import demo, queue
 from opsmith.api.app import create_app
+from opsmith.audit_log import transition_task
 from opsmith.audits import checks as checks_module
 from opsmith.audits.checks import Located, check_target_id, locate, seen_lines
 from opsmith.db import utcnow
@@ -36,6 +37,7 @@ from opsmith.models import (
 from opsmith.scheduler import ensure_project_schedules
 from opsmith.schemas import ProjectSettings
 from tests.conftest import FAKE_AWS_KEY
+from tests.test_executor import make_task
 
 TIMEOUT_LINE = (
     'response = httpx.post(GATEWAY_URL, json={"amount": amount_cents, "customer": customer_id})'
@@ -555,3 +557,81 @@ def test_the_offline_rules_decline_a_check() -> None:
     assert data["analyzed"] is False
     assert data["findings"] == []
     assert re.search("cannot follow a written instruction", data["notes"][0])
+
+
+# --------------------------------------------------------------------------- after a merge
+
+
+def merge(platform, task_id: str) -> None:
+    with platform.db.session() as s:
+        task = s.get(Task, task_id)
+        for state in ("approved", "executing", "pr_open", "merged"):
+            transition_task(s, task, state)
+        task.merged_at = utcnow()
+
+
+def only_task(platform) -> str:
+    with platform.db.session() as s:
+        return s.scalars(select(Task)).one().id
+
+
+def verify(platform, task_id: str) -> dict[str, Any]:
+    with platform.db.session() as s:
+        return platform.verifier.run(s, task_id)
+
+
+@pytest.mark.parametrize(("found_again", "outcome"), [(False, "verified"), (True, "regressed")])
+def test_a_task_from_a_check_is_judged_by_the_next_run_of_that_check(
+    platform, seed, drain, found_again: bool, outcome: str
+) -> None:
+    """Without this, a task found only by a check waited 48 hours after its merge and then
+    failed as a dead job: the verifier knew only audit findings."""
+    answers = iter([timeout_finding, timeout_finding if found_again else lambda r: {}])
+
+    def answer(request: ProviderRequest) -> dict[str, Any]:
+        return next(answers)(request)
+
+    configure(platform, seed, Scripted(answer), check(paths=["app/**"]))
+    run_check(platform, seed, drain)
+    task_id = only_task(platform)
+    merge(platform, task_id)
+    run_check(platform, seed, drain)  # the same check, after the merge
+    assert verify(platform, task_id)["outcome"] == outcome
+
+
+def test_only_the_same_check_can_judge_its_task(platform, seed, drain) -> None:
+    """Negative: neither another check nor a regular audit ran the instruction again, so
+    neither may declare the problem gone."""
+    configure(
+        platform,
+        seed,
+        Scripted(lambda r: timeout_finding(r) if "timeout" in r.user else {"findings": []}),
+        check(paths=["app/**"]),
+        check("other-check", instructions="Find unused imports.", paths=["app/**"]),
+    )
+    run_check(platform, seed, drain)
+    task_id = only_task(platform)
+    merge(platform, task_id)
+    run_check(platform, seed, drain, name="other-check")
+    with platform.db.session() as s:
+        queue.enqueue(
+            s,
+            tenant_id=seed.tenant.id,
+            kind="audit",
+            payload={"repository_id": seed.repo.id, "mode": "full"},
+            idempotency_key="test:audit:after-merge",
+        )
+    drain()
+    with platform.db.session() as s, pytest.raises(queue.RetryLater):
+        platform.verifier.run(s, task_id)
+
+
+def test_a_check_run_does_not_judge_an_audit_finding(platform, seed, drain) -> None:
+    """Negative: a check does not run the analyzers, so it cannot show that an audit's
+    finding is gone."""
+    task_id = make_task(platform, seed, fp="fp-audit-only")
+    merge(platform, task_id)
+    configure(platform, seed, Scripted(lambda r: {"findings": []}), check(paths=["app/**"]))
+    run_check(platform, seed, drain)
+    with platform.db.session() as s, pytest.raises(queue.RetryLater):
+        platform.verifier.run(s, task_id)

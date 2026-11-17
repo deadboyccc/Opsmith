@@ -103,6 +103,12 @@ class Verifier:
         signals = {f.signal for f in findings if f.signal}
         services = {f.service_id for f in findings if f.service_id}
         static_fps = {f.fingerprint for f in findings if f.source.startswith("audit:")}
+        # A check's finding is judged only by a later run of the same check: neither the
+        # analyzers nor another check carry out its instruction (ADR-019).
+        checks = {
+            f.source.removeprefix("check:") for f in findings if f.source.startswith("check:")
+        }
+        check_fps = {f.fingerprint for f in findings if f.source.startswith("check:")}
         evidence: list[str] = []
         observed = False
         if signals and services:
@@ -127,17 +133,26 @@ class Verifier:
                     for feat in b.metric_features:
                         if feat["signal"] in signals and feat.get("anomalous"):
                             evidence.append(feat["ref"])
-        if static_fps and task.repository_id:
-            later_audit = session.scalar(
-                select(AuditRun)
-                .where(
+        if (static_fps or check_fps) and task.repository_id:
+            later_runs = session.scalars(
+                select(AuditRun).where(
                     AuditRun.repository_id == task.repository_id,
                     AuditRun.status == "succeeded",
                     AuditRun.started_at >= task.merged_at,
                 )
-                .limit(1)
-            )
-            if later_audit is not None:
+            ).all()
+            judged: set[str] = set()
+            if static_fps and any(run.mode != "check" for run in later_runs):
+                judged |= static_fps
+            ran = {
+                t.removeprefix("check:")
+                for r in later_runs
+                if r.mode == "check"
+                for t in r.audit_types
+            }
+            if checks and checks <= ran:
+                judged |= check_fps
+            if judged:
                 observed = True
                 again = session.scalars(
                     select(Finding).where(
@@ -147,7 +162,7 @@ class Verifier:
                                 AuditRun.started_at >= task.merged_at,
                             )
                         ),
-                        Finding.fingerprint.in_(static_fps),
+                        Finding.fingerprint.in_(judged),
                     )
                 ).all()
                 evidence.extend(f"finding:{f.id}" for f in again)
