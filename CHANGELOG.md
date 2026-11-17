@@ -4,6 +4,22 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## 1.2.4 - 2026-11-17
+
+Documentation only. Every page was compared with the code as it now is.
+
+### Changed
+
+- The README states what is now tested (coverage and its floor; Claude through the real SDK
+  over a mocked transport) and links the security audit and the decision log. It no longer
+  lists a connector compatibility matrix as open work: the matrix exists.
+- Compatibility: how Claude is tested, and the FastAPI versions supported.
+- Deployment: the values `OPSMITH_LOG_LEVEL` accepts.
+- Operations: troubleshooting entries for the refusals added in 1.2.1 and 1.2.2 (a
+  repository saved with an address or branch git must not be given, build output that trips
+  the credential gate, a deferred audit, an oversized request), and the retries of a busy
+  model endpoint.
+
 ## 1.2.3 - 2026-11-17
 
 Tests and continuous integration. No change to what Opsmith does, apart from the one fix below.

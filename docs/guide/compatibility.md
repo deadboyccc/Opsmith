@@ -56,7 +56,7 @@ GitHub Enterprise Server (a different API URL) is not supported.
 |---|---|---|
 | `heuristic` (offline rules) | Built in | Drives the test suite and the demo |
 | `openai` (any OpenAI-compatible endpoint) | A scripted endpoint; **Ollama with `qwen2.5:1.5b`** | The whole acceptance scenario through the HTTP path, every push (`tests/test_provider_parity.py`); live against Ollama weekly (`live-models.yml`) |
-| `anthropic` (Claude) | Fake SDK clients | Unit tests only; not run against the Claude API in CI |
+| `anthropic` (Claude) | The `anthropic` SDK 2.8, over a mocked transport | The SDK's own request building and response parsing run for the structured stages and the coding agent, every push; not run against the Claude API in CI |
 
 See [Models](models.md) for configuration.
 
@@ -65,6 +65,7 @@ See [Models](models.md) for configuration.
 | Component | Verified against | How |
 |---|---|---|
 | Python | 3.12 | Every push. Other versions are untested |
+| FastAPI | 0.121 or newer (the lock file has 0.163) | Every push |
 | PostgreSQL | 18.6 | The whole suite and the migrations, every push. Older versions are untested |
 | SQLite | The version bundled with Python 3.12 | The whole suite, every push |
 | Docker sandbox | Docker Engine on GitHub's `ubuntu-latest` runners, and 29.9 | Real containers, every push (`pytest -m docker`) |

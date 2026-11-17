@@ -191,7 +191,9 @@ pick a model per stage. [Models](docs/guide/models.md) has the three-line setups
 | **Audit trail** | Every state change and decision is recorded; finished analysis runs are immutable |
 
 Each of these is mapped to its enforcement point and to the tests that try to break it in
-[Security](docs/guide/security.md), together with the limits you should know about.
+[Security](docs/guide/security.md), together with the limits you should know about. The last
+[security audit](docs/SECURITY-AUDIT.md) records what was looked for, what was fixed and what
+is still open.
 
 ## What has been tested
 
@@ -204,14 +206,16 @@ Honest scope, so you can judge it:
 | Docker sandbox | Tested with **real containers** (network, filesystem, capabilities, timeouts, and a full execution). Skipped automatically where Docker is absent |
 | Compose deployment | Built and started end to end, including the worker starting sandbox containers through the overlay |
 | Documentation | Every command in [Getting started](docs/guide/getting-started.md) was run as written. A check in CI compares the docs with the code: links, cited tests, environment variables, settings, API endpoints, events, connector types, states and commands |
+| Coverage | 94.5% of lines and branches. CI fails below 93%, and audits the locked dependencies for known vulnerabilities on every push |
 | Loki, Prometheus | Run **against real servers** in CI on every push: Loki 2.9 and 3.7, Prometheus 2.53, 3.5 and 3.16. See the [compatibility matrix](docs/guide/compatibility.md) |
 | GitHub | Tested against **mocked HTTP** only. Not yet exercised against github.com in CI |
-| Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested against **fake clients** only |
+| Models | The offline rule-based provider drives the tests and the demo. The whole acceptance scenario also runs through the OpenAI-compatible HTTP path against a scripted endpoint and must end identically (`tests/test_provider_parity.py`). That provider and its coding agent were also run **live against Ollama** with a small open model, and a workflow repeats that weekly. Claude is tested with the **real Anthropic SDK over a mocked transport**, not against the Claude API |
 | Production use | None yet. No load tests, no long-running deployment |
 
 There are no published quality metrics yet (precision of findings, share of pull requests
-merged, verified-fix rate). That and a tested connector matrix are the main open work; see the
-[changelog](CHANGELOG.md) and [the review response](docs/development/review-response.md).
+merged, verified-fix rate). That is the main open work; see the [changelog](CHANGELOG.md),
+[the review response](docs/development/review-response.md) and the open findings of the
+[security audit](docs/SECURITY-AUDIT.md#open-findings).
 
 ## Documentation
 
@@ -230,6 +234,7 @@ The full index is in [docs/README.md](docs/README.md). The pages are split by re
 | [Operations](docs/guide/operations.md) | Monitor, upgrade and troubleshoot it |
 | [API](docs/guide/api.md) | Authenticate, understand roles, call the REST API |
 | [Security](docs/guide/security.md) | Know what is guaranteed, which test proves it, and what is not protected |
+| [Security audit](docs/SECURITY-AUDIT.md) | See what the last audit found, what was fixed and what is open |
 | [Compatibility](docs/guide/compatibility.md) | See which versions of Loki, Prometheus and the rest are verified, and how |
 
 **Developing Opsmith**
@@ -241,13 +246,15 @@ The full index is in [docs/README.md](docs/README.md). The pages are split by re
 | [Architecture](docs/development/architecture.md) | Understand the internals and the plugin points |
 | [Testing](docs/development/testing.md) | Run and write tests |
 | [Architecture decisions](ARCHITECTURE_DECISIONS.md) | See why it is built this way, and the known limitations |
+| [Decisions](docs/DECISIONS.md) | See how individual fixes and tooling choices were decided |
 | [Changelog](CHANGELOG.md) | See what changed |
 
 ## Contributing
 
 ```bash
 uv sync --all-extras
-make check        # what CI runs: ruff, format check, mypy, tests with coverage, docs links
+make check        # ruff, format check, mypy, tests with a coverage floor, docs links
+make audit        # known vulnerabilities in the locked dependencies (needs network)
 ```
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). It is short.

@@ -213,7 +213,7 @@ All are optional unless marked. [`.env.example`](../../.env.example) lists the s
 | `OPSMITH_ANTHROPIC_FALLBACKS` | `default` | Server-side refusal fallbacks for Claude; `off` disables |
 | `OPSMITH_BASE_URL` | unset | Public URL of the UI; makes pull requests link to their task |
 | `OPSMITH_WORKER_LEASE_SECONDS` | `900` | How long after a worker dies its job is retried |
-| `OPSMITH_LOG_LEVEL` | `INFO` | Log level |
+| `OPSMITH_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, in either case. Anything else stops the process at start |
 | `OPSMITH_LOG_JSON` | `true` | JSON logs; `false` for plain text |
 | `OPSMITH_BOT_NAME`, `OPSMITH_BOT_EMAIL` | `Opsmith Bot`, a noreply address | Author of agent commits |
 | `DOCKER_GID` | none | Only with the sandbox overlay: group id of the Docker socket |

@@ -110,6 +110,10 @@ release first opens it.
 | `... is outside OPSMITH_LOCAL_ROOT` or `reads the worker's filesystem, which is disabled` | Set `OPSMITH_LOCAL_ROOT` to the directory holding your local repositories and signal files |
 | `... names a variable reserved for the platform` | A `credentials_ref` pointed at one of Opsmith's own secrets. Use a dedicated variable |
 | An analysis run is `failed` with a validation error | The model did not return JSON matching the stage's schema, twice. Use a more capable model for that stage |
-| `model endpoint unreachable` or `HTTP 4xx` from the model endpoint | Check `OPSMITH_OPENAI_BASE_URL`, the key, and the model name in the project settings |
+| `model endpoint unreachable` or `HTTP 4xx` from the model endpoint | Check `OPSMITH_OPENAI_BASE_URL`, the key, and the model name in the project settings. A 429 or 5xx is retried twice before it is reported |
+| An audit or execution fails with `repository ...: a github repository needs an https:// clone URL` (or `default_branch must be a plain branch name`) | The repository was saved before 1.2.2 with a value git must not be given. Correct it with `opsmith apply` or the API |
+| `diff introduces credential-like values` naming a file the agent did not write | A check command left build output in the checkout (for example compiled bytecode holding a string from the source). Ignore those files in the repository's `.gitignore` |
+| An audit is deferred with `another audit of this repository is running` | Expected: audits of one repository share a checkout and run one at a time |
+| `request body is over ... bytes` (`413`) | A request over 1 MiB, or a push over 32 MiB. Send pushes in smaller batches |
 | Permission denied on `/var/run/docker.sock` | `DOCKER_GID` does not match the socket's group |
 | UI form posts are rejected with 403 behind a proxy | The proxy must pass the browser's `Host` header through unchanged |
