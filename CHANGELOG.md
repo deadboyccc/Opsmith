@@ -6,6 +6,8 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+## 1.4.0 - 2026-11-17
+
 ### Added
 
 - **A VictoriaLogs connector** (`victorialogs`), read-only, through the LogsQL query API. It
