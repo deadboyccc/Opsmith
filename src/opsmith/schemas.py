@@ -139,6 +139,21 @@ class ProtectedPath(BaseModel):
     pattern: str = Field(min_length=1)  # fnmatch-style glob, e.g. ".github/**" or "src/auth/*"
     mode: Literal["elevated", "excluded"] = "elevated"
 
+    @field_validator("pattern")
+    @classmethod
+    def _can_match(cls, value: str) -> str:
+        """A pattern that can never match a path in the repository protects nothing, and
+        nobody would notice: it is refused when it is saved."""
+        from opsmith.protection import normalize_pattern  # noqa: PLC0415 - imports this module
+
+        normalized = normalize_pattern(value)
+        if not normalized or "\x00" in normalized or ".." in normalized.split("/"):
+            raise ValueError(
+                "a protected path pattern is a glob relative to the repository root, "
+                "for example '.github/**' or 'infra/'"
+            )
+        return value
+
 
 class Budgets(BaseModel):
     model_config = ConfigDict(extra="forbid")

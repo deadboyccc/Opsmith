@@ -53,6 +53,7 @@ from opsmith.models import (
     User,
 )
 from opsmith.platform import Platform
+from opsmith.protection import classify
 from opsmith.queue import Worker
 from opsmith.review import ReviewError, ReviewRequest, valid_branch_name
 from opsmith.scheduler import (
@@ -1085,3 +1086,21 @@ def test_secret_gate_cannot_be_bypassed_with_a_form_feed(platform, seed, drain) 
     drain()
     assert "credential-like" in task(platform, task_id).execution_report["error"]
     assert not _pr_branches(seed)
+
+
+@pytest.mark.parametrize(
+    "pattern", ["infra/", "/infra/**", "./infra/**", "infra", "/infra", "infra/**", "**/infra/**"]
+)
+def test_a_directory_pattern_protects_the_directory_however_it_is_spelled(pattern: str) -> None:
+    """``infra/``, ``/infra/**`` and ``./infra/**`` are how people write "the infra directory".
+    None of them matched anything, so the path was silently left unprotected."""
+    rules = ProjectSettings(protected_paths=[{"pattern": pattern, "mode": "excluded"}])
+    assert classify(["infra/main.tf"], rules.protected_paths) == "excluded"
+    assert classify(["infra/modules/vpc/main.tf"], rules.protected_paths) == "excluded"
+    assert classify(["src/infrastructure.py"], rules.protected_paths) == "none"
+
+
+@pytest.mark.parametrize("pattern", ["", "   ", "../secrets/**", "a/../../b", "x\x00y"])
+def test_a_protected_path_pattern_that_can_never_match_is_refused(pattern: str) -> None:
+    with pytest.raises(ValidationError):
+        ProjectSettings(protected_paths=[{"pattern": pattern, "mode": "excluded"}])

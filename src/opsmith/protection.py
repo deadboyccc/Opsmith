@@ -11,11 +11,28 @@ from opsmith.schemas import ProtectedPath
 _RANK = {"none": 0, "elevated": 1, "excluded": 2}
 
 
+def normalize_pattern(pattern: str) -> str:
+    """A pattern relative to the repository root, however it was written: ``/infra/**``,
+    ``./infra/**`` and ``infra/`` all mean the ``infra`` directory at the root."""
+    pattern = pattern.strip()
+    while pattern.startswith(("./", "/")):
+        pattern = pattern[2:] if pattern.startswith("./") else pattern[1:]
+    return pattern.rstrip("/")
+
+
 def path_matches(path: str, pattern: str) -> bool:
+    """Whether ``pattern`` covers ``path``. A pattern covers what it matches as a glob and,
+    like a ``.gitignore`` entry, everything below a directory it names: ``infra`` covers
+    ``infra/main.tf``. The patterns guard paths, so a spelling that looks like it protects a
+    directory must not silently match nothing."""
     path = path.removeprefix("./")
-    if fnmatch.fnmatch(path, pattern):
-        return True
-    return pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:])
+    pattern = normalize_pattern(pattern)
+    if not pattern:
+        return False
+    candidates = [pattern, f"{pattern}/*"]  # ``*`` also matches ``/``: everything below
+    if pattern.startswith("**/"):
+        candidates += [pattern[3:], f"{pattern[3:]}/*"]
+    return any(fnmatch.fnmatch(path, candidate) for candidate in candidates)
 
 
 def classify(paths: Iterable[str], rules: Iterable[ProtectedPath]) -> str:
