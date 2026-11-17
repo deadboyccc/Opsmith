@@ -19,6 +19,62 @@ Where to read first:
 | Why it is built this way | [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md); read the relevant ADR before changing a subsystem |
 | What is guaranteed, and which test proves it | [`docs/guide/security.md`](docs/guide/security.md) |
 | The original intent | [`docs/development/specification.md`](docs/development/specification.md) |
+| How past fixes and tool choices were decided | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
+| What the last security audit found and left open | [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md) |
+
+## How every session works
+
+Opsmith decides what code an AI agent may change on other people's repositories. Stability,
+robustness, reliability and security come before speed and before features. Every session,
+by a person or an agent, follows these rules.
+
+**Start from a known state.**
+
+1. Read this file, then the docs for the area you will touch, and the ADR behind it.
+2. Run `make check` before changing anything, and note the result. If it is not green, find
+   out why before you add to it. Never build on a red baseline without saying so.
+
+**Change the code with care.**
+
+3. Follow the conventions below and the code around you. Choose the correct, simple and
+   readable solution over the clever one; a reviewer must be able to see that it is right.
+4. Every change comes with tests: the happy path, the failure path and, for anything that
+   guards safety, a negative test that shows the bad path is blocked.
+5. **A bug fix starts with a failing test.** Write the test that reproduces the bug, run it,
+   and see it fail for the reason you expect. Then fix the code and see it pass. The test
+   stays, as the regression test.
+6. Secure by default. Validate input at the edge and bound it to what stores it. Keep
+   untrusted data as data. Never weaken an invariant below, never add a secret, credential,
+   real customer data or token to code, tests, fixtures, logs or commits, and never add an
+   unsafe pattern (`shell=True`, `eval`, `pickle`, string-built SQL, unconfined paths,
+   unbounded reads, calls without timeouts).
+7. Never hide a failure: no bare `except` that swallows, no skipped test to get green, no
+   retry that masks a bug. A failure surfaces (see *No silent drops*).
+
+**Prove it before you call it done.**
+
+8. Run `make check` again after the change, plus `make site` when docs changed. Run the
+   suite on PostgreSQL when you touched models or queries, and `uv run pytest -m docker`
+   when you touched the sandbox or the executor and Docker is available. Report failures
+   with their output; never describe a red run as green.
+9. Never merge, and never ask for a merge, with a regression: a test that passed before must
+   pass after, coverage must stay above the floor, and the build must be clean.
+
+**Leave the docs true. Every session ends with these, without exception.**
+
+10. **Update the Markdown docs** your change affects: the pages under `docs/`, the README,
+    this file, `CONTRIBUTING.md`. A behaviour the docs do not describe, or describe wrongly,
+    is a bug.
+11. **Update the documentation site.** It is built from those same pages, so it changes when
+    they do; add a new page to `nav` in `mkdocs.yml`, and run `make site` to prove it builds
+    with no broken link.
+12. **Update `CHANGELOG.md`** under *Unreleased* (Keep a Changelog: Added, Changed, Fixed,
+    Security, with *Upgrade notes* for anything an operator must do). The site's changelog
+    page is this file, so updating it updates the site.
+13. **Record significant decisions in `docs/DECISIONS.md`**, with the reasoning and the
+    options not taken: a choice between workable designs, a tool, something left open on
+    purpose. Design decisions about the system itself also get an ADR in
+    `ARCHITECTURE_DECISIONS.md`.
 
 ## Commands
 
@@ -26,6 +82,7 @@ Where to read first:
 uv sync --all-extras                 # install (Python 3.12+, uv 0.9+)
 make check                           # lint, format, mypy, tests + coverage floor, docs (CI's main job)
 make audit                           # known vulnerabilities in the locked dependencies (CI runs it)
+make site                            # build the documentation site, strict (make site-serve to preview)
 uv run pytest -q                     # tests (4-6 min); add -k <expr> to target, -m e2e for acceptance
 uv run pytest tests/test_e2e.py      # spec §11 acceptance criteria, end to end
 uv run pytest -m docker              # tests that start real containers (skipped without Docker)
@@ -63,10 +120,13 @@ OPSMITH_TEST_DATABASE_URL=postgresql+psycopg://opsmith:opsmith@localhost:5432/op
 | `review.py` | Human review gate and the approval scope digest |
 | `executor/` | Sandboxes, workspace confinement, coding agents, execution service, PR body |
 | `gitutil.py` | The only place git is invoked: safe config, trusted git dir, unambiguous parsing |
-| `scm/` | GitHub + local providers. **No merge operation, by design.** |
+| `scm/` | GitHub + local providers. **No merge operation, by design.** Repository addresses and branches are checked before git sees them (`scm.base.check_repository`) |
 | `tracking.py` | PR/CI tracking, post-merge verification |
 | `api/`, `ui/` | FastAPI JSON API (`/api/v1`) and server-rendered UI (`/ui`) |
-| `tests/` | Unit/integration tests; `conftest.py` seeds a tenant, users, project, git repo. `test_hardening.py` holds the adversarial tests |
+| `tests/` | Unit/integration tests; `conftest.py` seeds a tenant, users, project, git repo. `test_hardening.py` holds the adversarial tests, `test_runtime.py` the process loops |
+| `docs/`, root `*.md` | The documentation. `docs/guide/` for people running Opsmith, `docs/development/` for people changing it, `docs/DECISIONS.md` and `docs/SECURITY-AUDIT.md` for the record |
+| `mkdocs.yml`, `site/`, `scripts/build_site.py` | The documentation site: every Markdown page, published to GitHub Pages by `.github/workflows/docs.yml` |
+| `scripts/check_docs.py` | Fails the build when the docs and the code disagree (links, settings, endpoints, cited tests) |
 
 ## Invariants: never break these
 
@@ -180,15 +240,20 @@ short:
 
 ## Definition of done
 
-- [ ] `make check` passes (ruff, format, mypy, pytest).
-- [ ] New behaviour is covered by tests, including failure and negative paths.
+- [ ] `make check` passed before the change and passes after it (ruff, format, mypy, the
+      suite with the coverage floor, the docs check), with no test newly failing or skipped.
+- [ ] New behaviour is covered by tests, including failure and negative paths; a bug fix has
+      a test that failed before the fix.
 - [ ] Invariants above are untouched, or a human approved the change and an ADR records it.
-- [ ] Significant design changes are recorded in `ARCHITECTURE_DECISIONS.md`.
-- [ ] User-visible changes are in `CHANGELOG.md`, and the pages under `docs/` still match.
-- [ ] No secrets, tokens or real customer data in code, tests, fixtures or commits.
+- [ ] The Markdown docs match the code, and `make site` builds the documentation site.
+- [ ] `CHANGELOG.md` describes every user-visible change.
+- [ ] Significant decisions are in `docs/DECISIONS.md` (and design changes in
+      `ARCHITECTURE_DECISIONS.md`), with the reasoning.
+- [ ] No secrets, tokens or real customer data in code, tests, fixtures, logs or commits.
 
 ## Commits and PRs
 
-Use imperative, scoped messages (`executor: block secrets on added lines only`). Keep PRs
-focused, describe the risk and how you verified the change, and never commit generated data
-(`data/`, `*.db`, demo output).
+Use imperative, scoped messages (`executor: block secrets on added lines only`), one topic
+per commit. Work on a branch and open a pull request; keep PRs focused, describe the risk and
+how you verified the change, and wait for CI to be green. Never commit generated data
+(`data/`, `*.db`, demo output, `build/`).
