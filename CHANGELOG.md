@@ -6,6 +6,13 @@ the database schema says so under *Upgrade notes*.
 
 ## Unreleased
 
+### Changed
+
+- **Session rules: release every change.** `AGENTS.md` and `CLAUDE.md` now require that each
+  commit carries its changelog entry, that each change reaching `main` is released at once
+  (tag and GitHub Release), and that the docs and the documentation site describe a change
+  before it is pushed, with the Pages deploy checked after.
+
 ## 1.4.2 - 2026-11-17
 
 ### Fixed

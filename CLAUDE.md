@@ -19,6 +19,13 @@ Code; where the two seem to differ, `AGENTS.md` wins.
     `mkdocs.yml`;
   - update `CHANGELOG.md` under *Unreleased* (the site's changelog page is that file);
   - record significant decisions, with the reasoning, in `docs/DECISIONS.md`.
+- **Release every change, and push nothing the docs do not describe yet** (rules 14 and 15
+  in `AGENTS.md`):
+  - every commit carries its `CHANGELOG.md` entry;
+  - every change that lands on `main` is released at once: version, tag `v<version>`, and a
+    GitHub Release with the changelog section as its notes;
+  - before every push, update the docs and run `make site`; after a push to `main`, confirm
+    that the Pages deploy finished and the live site shows the new version.
 - The **Invariants** section of `AGENTS.md` is non-negotiable: never add an approval bypass,
   a merge path, an LLM call that skips `LLMGateway`, or a way for repository code to run
   outside the sandbox. If a task seems to need one, stop and ask.

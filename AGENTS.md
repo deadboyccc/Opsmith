@@ -76,6 +76,21 @@ by a person or an agent, follows these rules.
     purpose. Design decisions about the system itself also get an ADR in
     `ARCHITECTURE_DECISIONS.md`.
 
+**Ship every change, with docs that already describe it.**
+
+14. **Every commit carries its changelog entry, and every change that reaches `main` is
+    released.** A commit that changes the product, its docs or its tooling adds its entry
+    under *Unreleased* in the same commit. When it lands on `main`, release it at once: move
+    the entries under `## <version> - <yyyy-mm-dd>` (a patch version for fixes, a minor one
+    for features), set that version in `pyproject.toml` and `src/opsmith/__init__.py`, tag
+    `v<version>`, and publish a GitHub Release whose notes are that changelog section. Do not
+    let unreleased changes collect on `main`.
+15. **Before every push, the docs and the site are up to date.** The Markdown pages, the
+    README and `CHANGELOG.md` describe the change, every new page is in `nav`, and `make
+    site` builds with no warning. After a push to `main`, check that the *Docs* workflow
+    deployed GitHub Pages and that the live site shows the new version and changelog; a
+    failed deploy is fixed before other work.
+
 ## Commands
 
 ```bash
@@ -246,7 +261,8 @@ short:
       a test that failed before the fix.
 - [ ] Invariants above are untouched, or a human approved the change and an ADR records it.
 - [ ] The Markdown docs match the code, and `make site` builds the documentation site.
-- [ ] `CHANGELOG.md` describes every user-visible change.
+- [ ] `CHANGELOG.md` describes every user-visible change, in the commit that makes it; once on
+      `main`, the change is released (tag and GitHub Release) and the live site shows it.
 - [ ] Significant decisions are in `docs/DECISIONS.md` (and design changes in
       `ARCHITECTURE_DECISIONS.md`), with the reasoning.
 - [ ] No secrets, tokens or real customer data in code, tests, fixtures, logs or commits.

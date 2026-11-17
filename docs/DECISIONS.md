@@ -398,3 +398,13 @@ in `${X:-...}`, and anything in a string or comment, such as a JDBC URL in a Jav
 
 Not done: lowering the severity of these matches instead of skipping them. They would still
 be tasks, and a reviewer would still have to reject each one.
+
+## Release every change (1.4.3)
+
+The maintainer asked for every change to be released as it lands, with its changelog entry
+in the same commit, and for the docs and the site to be current before any push. Releases
+were already small and frequent; writing it down makes it the rule for every session, person
+or agent. The cost is many patch releases; the benefit is that an operator can always name
+the version that contains a fix, and that the published site never trails `main`. Not
+adopted: batching changes into periodic releases, which leaves fixes on `main` that no
+version contains.
