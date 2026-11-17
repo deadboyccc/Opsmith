@@ -285,3 +285,18 @@ do it either. The deploy job therefore checks first: while Pages is off it build
 the site, skips the deployment and leaves a warning on the run, instead of turning `main`
 red. Once a repository admin selects *Settings, Pages, Source: GitHub Actions*, the next push
 to `main` (or running the *Docs* workflow by hand) publishes the site.
+
+## Contributor rules (1.3.1)
+
+### The session rules live in `AGENTS.md`; `CLAUDE.md` imports them
+
+`AGENTS.md` is read by people and by any coding agent; `CLAUDE.md` is read by Claude Code and
+imports `AGENTS.md`. Writing the rules once and importing them keeps the two from drifting.
+`CLAUDE.md` repeats only a short summary (so the rules are visible even where the import is
+not followed) and adds what is specific to Claude Code and the Claude API.
+
+### What the rules leave out on purpose
+
+The work that produced these rules pushed each release straight to `main`, which the
+repository owner allowed for that work only. The rules say the opposite (branch, pull
+request, green CI), because that is the standing practice.

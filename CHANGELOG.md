@@ -4,6 +4,25 @@ Notable changes to Opsmith. The format follows [Keep a Changelog](https://keepac
 versions follow [Semantic Versioning](https://semver.org/) from 1.0.0. A release that changes
 the database schema says so under *Upgrade notes*.
 
+## Unreleased
+
+## 1.3.1 - 2026-11-17
+
+### Changed
+
+- **`AGENTS.md` and `CLAUDE.md` hold every session to the same rules**: run the full build and
+  tests before and after a change; test every change, starting a bug fix with a failing test;
+  stay secure by default and prefer correct, simple code; never merge with a regression; and
+  end every session by updating the Markdown docs, the documentation site, `CHANGELOG.md` and,
+  for significant decisions, [`docs/DECISIONS.md`](docs/DECISIONS.md). `CLAUDE.md` also records
+  the Claude API patterns introduced in 1.2.1.
+- `CHANGELOG.md` has an *Unreleased* section for changes waiting for a release.
+
+### Added
+
+- A [work report](reports/2026-11-17-bug-fixes-security-audit-tests-and-docs-site.md) on the
+  releases 1.2.1 to 1.3.1.
+
 ## 1.3.0 - 2026-11-17
 
 ### Added

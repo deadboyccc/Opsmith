@@ -6,4 +6,5 @@ sensitive data.
 
 | Date | Report |
 |---|---|
+| 2026-11-17 | [Bug fixes, security audit, tests and a documentation site](2026-11-17-bug-fixes-security-audit-tests-and-docs-site.md) |
 | 2026-11-16 | [Hardening, provider neutrality and documentation](2026-11-16-hardening-and-provider-neutrality.md) |

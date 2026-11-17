@@ -138,4 +138,5 @@ nav:
       - Repository About text: docs/development/repository-about.md
       - Work reports:
           - reports/README.md
+          - Bug fixes, audit, tests and site: reports/2026-11-17-bug-fixes-security-audit-tests-and-docs-site.md
           - Hardening and provider neutrality: reports/2026-11-16-hardening-and-provider-neutrality.md
